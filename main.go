@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -96,6 +97,7 @@ func formatReset(raw *string, layout string) string {
 func main() {
 	sessionPct := flag.Float64("s", 90, "show reset time when session usage exceeds this %")
 	weeklyPct := flag.Float64("w", 80, "show weekly usage when it exceeds this %")
+	remaining := flag.Bool("r", false, "show remaining capacity instead of usage")
 	flag.Parse()
 
 	home, err := os.UserHomeDir()
@@ -160,14 +162,25 @@ func main() {
 
 	plan := creds.ClaudeAiOauth.SubscriptionType
 	if plan == "" {
-		plan = "unknown"
+		plan = "Unknown"
+	} else {
+		plan = strings.ToUpper(plan[:1]) + plan[1:]
 	}
 
-	out := plan
+	out := "Claude " + plan
+
+	pct := func(utilization float64) string {
+		suffix := ""
+		v := utilization
+		if *remaining {
+			v = 100 - utilization
+			suffix = " left"
+		}
+		return fmt.Sprintf("%.0f%%%s", v, suffix)
+	}
 
 	if usage.FiveHour != nil {
-		remaining := 100 - usage.FiveHour.Utilization
-		out += fmt.Sprintf(" %.0f%%", remaining)
+		out += " " + pct(usage.FiveHour.Utilization)
 
 		if usage.FiveHour.Utilization >= *sessionPct {
 			if s := formatReset(usage.FiveHour.ResetsAt, "3:04pm"); s != "" {
@@ -177,12 +190,12 @@ func main() {
 	}
 
 	if usage.SevenDay != nil && usage.SevenDay.Utilization >= *weeklyPct {
-		weekRemaining := 100 - usage.SevenDay.Utilization
-		out += fmt.Sprintf(" week: %.0f%%", weekRemaining)
+		week := "week: " + pct(usage.SevenDay.Utilization)
 
 		if s := formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"); s != "" {
-			out += fmt.Sprintf(" (resets %s)", s)
+			week += fmt.Sprintf(" (resets %s)", s)
 		}
+		out += " [" + week + "]"
 	}
 
 	fmt.Println(out)

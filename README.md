@@ -29,7 +29,7 @@ go build -o claude-tokens .
 ## Usage
 
 ```
-claude-tokens [-s threshold] [-w threshold]
+claude-tokens [-s threshold] [-w threshold] [-r]
 ```
 
 ### Flags
@@ -38,32 +38,39 @@ claude-tokens [-s threshold] [-w threshold]
 |------|---------|-------------|
 | `-s` | `90` | Show session reset time when 5-hour usage exceeds this percentage |
 | `-w` | `80` | Show weekly usage info when 7-day usage exceeds this percentage |
+| `-r` | off | Show remaining capacity instead of usage (e.g. `55% left` instead of `45%`) |
 
 ### Output
 
 The program prints a single line with your current token usage:
 
 ```
-pro 45%
+Claude Pro 45%
+```
+
+With `-r`, it shows remaining capacity instead:
+
+```
+Claude Pro 55% left
 ```
 
 When session usage exceeds the `-s` threshold, the reset time is appended:
 
 ```
-pro 12% (resets 2:15pm)
+Claude Pro 12% (resets 2:15pm)
 ```
 
 When weekly usage also exceeds the `-w` threshold, weekly info is shown too:
 
 ```
-pro 12% (resets 2:15pm) week: 38% (resets Thu 10:30am)
+Claude Pro 12% (resets 2:15pm) [week: 38% (resets Thu 10:30am)]
 ```
 
 The fields are:
-- **plan** -- your subscription type (e.g. `pro`, `free`)
-- **session %** -- remaining tokens in the current 5-hour window
+- **plan** -- your subscription type, capitalized (e.g. `Pro`, `Free`)
+- **session %** -- token usage in the current 5-hour window (or remaining capacity with `-r`)
 - **session reset** -- when the 5-hour window resets (only shown above threshold)
-- **week %** -- remaining tokens in the 7-day window (only shown above threshold)
+- **week %** -- token usage in the 7-day window (only shown above threshold; or remaining with `-r`)
 - **week reset** -- when the 7-day window resets (only shown above threshold)
 
 All reset times are displayed in your local timezone.
@@ -80,6 +87,12 @@ Always show all info (set thresholds to 0):
 
 ```
 claude-tokens -s 0 -w 0
+```
+
+Show remaining capacity instead of usage:
+
+```
+claude-tokens -r
 ```
 
 ## Waybar Integration
