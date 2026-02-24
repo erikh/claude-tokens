@@ -34,11 +34,11 @@ claude-tokens [-s threshold] [-w threshold] [-r]
 
 ### Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-s` | `90` | Show session reset time when 5-hour usage exceeds this percentage |
-| `-w` | `80` | Show weekly usage info when 7-day usage exceeds this percentage |
-| `-r` | off | Show remaining capacity instead of usage (e.g. `55% left` instead of `45%`) |
+| Flag | Default | Description                                                                 |
+| ---- | ------- | --------------------------------------------------------------------------- |
+| `-s` | `90`    | Show session reset time when 5-hour usage exceeds this percentage           |
+| `-w` | `80`    | Show weekly usage info when 7-day usage exceeds this percentage             |
+| `-r` | off     | Show remaining capacity instead of usage (e.g. `55% left` instead of `45%`) |
 
 ### Output
 
@@ -67,6 +67,7 @@ Claude Pro 12% (resets 2:15pm) [week: 38% (resets Thu 10:30am)]
 ```
 
 The fields are:
+
 - **plan** -- your subscription type, capitalized (e.g. `Pro`, `Free`)
 - **session %** -- token usage in the current 5-hour window (or remaining capacity with `-r`)
 - **session reset** -- when the 5-hour window resets (only shown above threshold)
@@ -122,6 +123,55 @@ You can style it with your Waybar CSS (`~/.config/waybar/style.css`):
     color: #c4a7e7;
     padding: 0 10px;
 }
+```
+
+## Shell Integration
+
+Here's a way to use this tool as a part of your shell prompt:
+
+```bash
+case $TERM in
+    linux)
+    ;;
+    screen|tmux)
+      export TERM=tmux-256color
+    ;;
+    *)
+      time=$(date -d "$(stat /tmp/tokens | grep Modify | awk -F: '{ print $2":"$3":"$4 }')" +%s)
+      if [ $? -ne 0 ] || [ $(($time + 300)) -lt $(date +%s) ]
+      then
+        claude-tokens >/tmp/tokens
+      fi
+        export TOKENS=$(cat /tmp/tokens)
+        export RPROMPT="[%B$TOKENS%%b][%B%T%b]%b"
+
+        precmd() {
+            case $TERM in
+                tmux-256color)
+                    print -Pn "\ek$PROMPT\e\\"
+                    ;;
+                vt100)
+                    ;;
+                *)
+                    print -Pn "\e]0;$PROMPT\e\\"
+                    ;;
+            esac
+        }
+
+        preexec() {
+            case $TERM in
+                tmux-256color)
+                    print -Pn "\ek$1\e\\"
+                    ;;
+                vt100)
+                    ;;
+                *)
+                    print -Pn "\e]0;$1\e\\"
+                    ;;
+            esac
+        }
+        ;;
+esac
 ```
 
 ## How It Works
