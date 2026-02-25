@@ -282,6 +282,8 @@ claude-tokens -j | jq .
 
 ## Waybar Integration
 
+<center><img style="width: 80%" src="waybar.png" /></center>
+
 Add a custom module to your Waybar config (`~/.config/waybar/config`):
 
 ```json
@@ -310,6 +312,8 @@ You can style it with your Waybar CSS (`~/.config/waybar/style.css`):
 ```
 
 ## Shell Integration
+
+<center><img style="width: 80%" src="shell.png" /></center>
 
 Here's a way to use this tool as a part of your shell prompt:
 
