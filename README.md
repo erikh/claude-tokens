@@ -15,13 +15,13 @@ This creates the credentials file at `~/.claude/.credentials.json` that `claude-
 ## Installation
 
 ```
-go install gitea.com/erikh/claude-tokens@latest
+go install github.com/erikh/claude-tokens@latest
 ```
 
 Or build from source:
 
 ```
-git clone https://gitea.com/erikh/claude-tokens.git
+git clone https://github.com/erikh/claude-tokens.git
 cd claude-tokens
 go build -o claude-tokens .
 ```
@@ -29,7 +29,7 @@ go build -o claude-tokens .
 ## Usage
 
 ```
-claude-tokens [-s threshold] [-w threshold] [-r]
+claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j]
 ```
 
 ### Flags
@@ -38,7 +38,9 @@ claude-tokens [-s threshold] [-w threshold] [-r]
 | ---- | ------- | --------------------------------------------------------------------------- |
 | `-s` | `90`    | Show session reset time when 5-hour usage exceeds this percentage           |
 | `-w` | `80`    | Show weekly usage info when 7-day usage exceeds this percentage             |
+| `-W` | off     | Always show weekly usage (appended as `: Weekly: <pct>%`)                   |
 | `-r` | off     | Show remaining capacity instead of usage (e.g. `55% left` instead of `45%`) |
+| `-j` | off     | Output usage data as JSON                                                   |
 
 ### Output
 
@@ -57,24 +59,44 @@ Claude Pro 55% left
 When session usage exceeds the `-s` threshold, the reset time is appended:
 
 ```
-Claude Pro 12% (resets 2:15pm)
+Claude Pro 92% (resets 2:15pm)
 ```
 
-When weekly usage also exceeds the `-w` threshold, weekly info is shown too:
+When weekly usage exceeds the `-w` threshold, weekly info is shown in brackets:
 
 ```
-Claude Pro 12% (resets 2:15pm) [week: 38% (resets Thu 10:30am)]
+Claude Pro 92% (resets 2:15pm) [week: 85% (resets Thu 10:30am)]
 ```
+
+With `-W`, weekly usage is always displayed at the end, regardless of threshold:
+
+```
+Claude Pro 45%: Weekly: 13%
+```
+
+Combined with `-r`:
+
+```
+Claude Pro 55% left: Weekly: 87% left
+```
+
+With `-j`, output is JSON containing both session and weekly utilization percentages with their reset times:
+
+```json
+{"session":{"utilization":30,"resets_at":"2026-02-25T02:00:00.596989+00:00"},"weekly":{"utilization":13,"resets_at":"2026-03-03T07:00:00.597012+00:00"}}
+```
+
+Fields are omitted from JSON when the corresponding usage bucket is unavailable. Reset times are omitted when not present.
 
 The fields are:
 
-- **plan** -- your subscription type, capitalized (e.g. `Pro`, `Free`)
+- **plan** -- your subscription type, capitalized (e.g. `Pro`, `Max`, `Free`)
 - **session %** -- token usage in the current 5-hour window (or remaining capacity with `-r`)
 - **session reset** -- when the 5-hour window resets (only shown above threshold)
-- **week %** -- token usage in the 7-day window (only shown above threshold; or remaining with `-r`)
-- **week reset** -- when the 7-day window resets (only shown above threshold)
+- **week %** -- token usage in the 7-day window (shown above threshold with `-w`, or always with `-W`; remaining with `-r`)
+- **week reset** -- when the 7-day window resets (only shown above threshold in bracket format)
 
-All reset times are displayed in your local timezone.
+All reset times are displayed in your local timezone (human-readable output) or as raw RFC3339 timestamps (JSON output).
 
 ### Examples
 
@@ -90,10 +112,34 @@ Always show all info (set thresholds to 0):
 claude-tokens -s 0 -w 0
 ```
 
+Always show weekly usage alongside session usage:
+
+```
+claude-tokens -W
+```
+
 Show remaining capacity instead of usage:
 
 ```
 claude-tokens -r
+```
+
+Show remaining capacity with weekly always visible:
+
+```
+claude-tokens -r -W
+```
+
+Output as JSON (useful for scripting or piping to `jq`):
+
+```
+claude-tokens -j
+```
+
+Pretty-print JSON output:
+
+```
+claude-tokens -j | jq .
 ```
 
 ## Waybar Integration

@@ -44,6 +44,16 @@ type tokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
+type jsonBucket struct {
+	Utilization float64 `json:"utilization"`
+	ResetsAt    string  `json:"resets_at,omitempty"`
+}
+
+type jsonUsageOutput struct {
+	Session *jsonBucket `json:"session,omitempty"`
+	Weekly  *jsonBucket `json:"weekly,omitempty"`
+}
+
 func refreshToken(creds *credentials, credsPath string) error {
 	body, _ := json.Marshal(map[string]string{
 		"grant_type":    "refresh_token",
@@ -94,10 +104,87 @@ func formatReset(raw *string, layout string) string {
 	return t.Local().Format(layout)
 }
 
+type displayOptions struct {
+	sessionPct   float64
+	weeklyPct    float64
+	alwaysWeekly bool
+	remaining    bool
+}
+
+func formatPct(utilization float64, remaining bool) string {
+	suffix := ""
+	v := utilization
+	if remaining {
+		v = 100 - utilization
+		suffix = " left"
+	}
+	return fmt.Sprintf("%.0f%%%s", v, suffix)
+}
+
+func formatJSON(usage usageResponse) (string, error) {
+	out := jsonUsageOutput{}
+	if usage.FiveHour != nil {
+		b := jsonBucket{Utilization: usage.FiveHour.Utilization}
+		if usage.FiveHour.ResetsAt != nil {
+			b.ResetsAt = *usage.FiveHour.ResetsAt
+		}
+		out.Session = &b
+	}
+	if usage.SevenDay != nil {
+		b := jsonBucket{Utilization: usage.SevenDay.Utilization}
+		if usage.SevenDay.ResetsAt != nil {
+			b.ResetsAt = *usage.SevenDay.ResetsAt
+		}
+		out.Weekly = &b
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func formatDisplay(usage usageResponse, plan string, opts displayOptions) string {
+	if plan == "" {
+		plan = "Unknown"
+	} else {
+		plan = strings.ToUpper(plan[:1]) + plan[1:]
+	}
+
+	out := "Claude " + plan
+
+	if usage.FiveHour != nil {
+		out += " " + formatPct(usage.FiveHour.Utilization, opts.remaining)
+
+		if usage.FiveHour.Utilization >= opts.sessionPct {
+			if s := formatReset(usage.FiveHour.ResetsAt, "3:04pm"); s != "" {
+				out += fmt.Sprintf(" (resets %s)", s)
+			}
+		}
+	}
+
+	if usage.SevenDay != nil {
+		if opts.alwaysWeekly {
+			out += ": Weekly: " + formatPct(usage.SevenDay.Utilization, opts.remaining)
+		} else if usage.SevenDay.Utilization >= opts.weeklyPct {
+			week := "week: " + formatPct(usage.SevenDay.Utilization, opts.remaining)
+
+			if s := formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"); s != "" {
+				week += fmt.Sprintf(" (resets %s)", s)
+			}
+			out += " [" + week + "]"
+		}
+	}
+
+	return out
+}
+
 func main() {
 	sessionPct := flag.Float64("s", 90, "show reset time when session usage exceeds this %")
 	weeklyPct := flag.Float64("w", 80, "show weekly usage when it exceeds this %")
+	alwaysWeekly := flag.Bool("W", false, "always show weekly usage")
 	remaining := flag.Bool("r", false, "show remaining capacity instead of usage")
+	jsonOutput := flag.Bool("j", false, "output usage as JSON")
 	flag.Parse()
 
 	home, err := os.UserHomeDir()
@@ -160,43 +247,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	plan := creds.ClaudeAiOauth.SubscriptionType
-	if plan == "" {
-		plan = "Unknown"
-	} else {
-		plan = strings.ToUpper(plan[:1]) + plan[1:]
-	}
-
-	out := "Claude " + plan
-
-	pct := func(utilization float64) string {
-		suffix := ""
-		v := utilization
-		if *remaining {
-			v = 100 - utilization
-			suffix = " left"
+	if *jsonOutput {
+		s, err := formatJSON(usage)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error marshaling JSON: %v\n", err)
+			os.Exit(1)
 		}
-		return fmt.Sprintf("%.0f%%%s", v, suffix)
+		fmt.Println(s)
+		return
 	}
 
-	if usage.FiveHour != nil {
-		out += " " + pct(usage.FiveHour.Utilization)
-
-		if usage.FiveHour.Utilization >= *sessionPct {
-			if s := formatReset(usage.FiveHour.ResetsAt, "3:04pm"); s != "" {
-				out += fmt.Sprintf(" (resets %s)", s)
-			}
-		}
+	opts := displayOptions{
+		sessionPct:   *sessionPct,
+		weeklyPct:    *weeklyPct,
+		alwaysWeekly: *alwaysWeekly,
+		remaining:    *remaining,
 	}
-
-	if usage.SevenDay != nil && usage.SevenDay.Utilization >= *weeklyPct {
-		week := "week: " + pct(usage.SevenDay.Utilization)
-
-		if s := formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"); s != "" {
-			week += fmt.Sprintf(" (resets %s)", s)
-		}
-		out += " [" + week + "]"
-	}
-
-	fmt.Println(out)
+	fmt.Println(formatDisplay(usage, creds.ClaudeAiOauth.SubscriptionType, opts))
 }
