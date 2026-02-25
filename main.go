@@ -193,7 +193,7 @@ func formatDisplay(usage usageResponse, plan string, opts displayOptions) string
 	return out
 }
 
-func formatCustom(format string, usage usageResponse, plan string, remaining bool) string {
+func formatCustom(format string, usage usageResponse, plan string, opts displayOptions) string {
 	if plan == "" {
 		plan = "Unknown"
 	} else {
@@ -212,7 +212,7 @@ func formatCustom(format string, usage usageResponse, plan string, remaining boo
 			out.WriteString(plan)
 		case 's':
 			if usage.FiveHour != nil {
-				out.WriteString(formatPct(usage.FiveHour.Utilization, remaining))
+				out.WriteString(formatPct(usage.FiveHour.Utilization, opts.remaining))
 			}
 		case 'S':
 			if usage.FiveHour != nil {
@@ -220,10 +220,18 @@ func formatCustom(format string, usage usageResponse, plan string, remaining boo
 			}
 		case 'w':
 			if usage.SevenDay != nil {
-				out.WriteString(formatPct(usage.SevenDay.Utilization, remaining))
+				out.WriteString(formatPct(usage.SevenDay.Utilization, opts.remaining))
 			}
 		case 'W':
 			if usage.SevenDay != nil {
+				out.WriteString(formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"))
+			}
+		case 't':
+			if usage.FiveHour != nil && usage.FiveHour.Utilization >= opts.sessionPct {
+				out.WriteString(formatReset(usage.FiveHour.ResetsAt, "3:04pm"))
+			}
+		case 'T':
+			if usage.SevenDay != nil && usage.SevenDay.Utilization >= opts.weeklyPct {
 				out.WriteString(formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"))
 			}
 		case '%':
@@ -240,8 +248,8 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [FORMAT ...]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Trailing arguments are joined and used as a format string.\n")
-		fmt.Fprintf(os.Stderr, "Format verbs: %%p plan, %%s session%%, %%S session reset,\n")
-		fmt.Fprintf(os.Stderr, "              %%w weekly%%, %%W weekly reset, %%%% literal %%\n\n")
+		fmt.Fprintf(os.Stderr, "Format verbs: %%p plan, %%s session%%, %%S session reset, %%t session reset (threshold),\n")
+		fmt.Fprintf(os.Stderr, "              %%w weekly%%, %%W weekly reset, %%T weekly reset (threshold), %%%% literal %%\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -312,9 +320,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	opts := displayOptions{
+		sessionPct:   *sessionPct,
+		weeklyPct:    *weeklyPct,
+		alwaysWeekly: *alwaysWeekly,
+		remaining:    *remaining,
+	}
+
 	if args := flag.Args(); len(args) > 0 {
 		formatStr := strings.Join(args, " ")
-		fmt.Print(stripTermCodes(formatCustom(formatStr, usage, creds.ClaudeAiOauth.SubscriptionType, *remaining)))
+		fmt.Print(stripTermCodes(formatCustom(formatStr, usage, creds.ClaudeAiOauth.SubscriptionType, opts)))
 		return
 	}
 
@@ -328,11 +343,5 @@ func main() {
 		return
 	}
 
-	opts := displayOptions{
-		sessionPct:   *sessionPct,
-		weeklyPct:    *weeklyPct,
-		alwaysWeekly: *alwaysWeekly,
-		remaining:    *remaining,
-	}
 	fmt.Print(stripTermCodes(formatDisplay(usage, creds.ClaudeAiOauth.SubscriptionType, opts)))
 }

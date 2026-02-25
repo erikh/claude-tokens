@@ -108,12 +108,14 @@ Any trailing arguments are joined with spaces and interpreted as a format string
 |------|-----------|---------|
 | `%p` | Plan name (capitalized) | `Pro` |
 | `%s` | Session utilization | `45%` or `55% left` (respects `-r`) |
-| `%S` | Session reset time | `2:15pm` |
+| `%S` | Session reset time (always) | `2:15pm` |
+| `%t` | Session reset time (only when usage >= `-s` threshold) | `2:15pm` or empty |
 | `%w` | Weekly utilization | `13%` or `87% left` (respects `-r`) |
-| `%W` | Weekly reset time | `Thu 10:30am` |
+| `%W` | Weekly reset time (always) | `Thu 10:30am` |
+| `%T` | Weekly reset time (only when usage >= `-w` threshold) | `Thu 10:30am` or empty |
 | `%%` | Literal `%` | `%` |
 
-When a value is unavailable (nil bucket, no reset time), the verb expands to an empty string. Unknown verbs pass through as-is.
+When a value is unavailable (nil bucket, no reset time), the verb expands to an empty string. The `%t` and `%T` verbs also expand to an empty string when usage is below the corresponding threshold. Unknown verbs pass through as-is.
 
 ```
 claude-tokens '%p: %s used, resets %S'
@@ -127,6 +129,10 @@ claude-tokens -r '%p %s session, %w weekly'
 
 claude-tokens %p %s %w
 # Pro 45% 13%
+
+claude-tokens -s 50 '%s (resets %t)'
+# 60% (resets 2:15pm)    — when session >= 50%
+# 30%  (resets )          — when session < 50%, %t is empty
 ```
 
 Note that shell quoting is optional — unquoted arguments are joined with spaces automatically. Use quotes if your format contains characters the shell might interpret.
