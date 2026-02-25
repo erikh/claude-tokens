@@ -179,12 +179,56 @@ func formatDisplay(usage usageResponse, plan string, opts displayOptions) string
 	return out
 }
 
+func formatCustom(format string, usage usageResponse, plan string, remaining bool) string {
+	if plan == "" {
+		plan = "Unknown"
+	} else {
+		plan = strings.ToUpper(plan[:1]) + plan[1:]
+	}
+
+	var out strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' || i+1 >= len(format) {
+			out.WriteByte(format[i])
+			continue
+		}
+		i++
+		switch format[i] {
+		case 'p':
+			out.WriteString(plan)
+		case 's':
+			if usage.FiveHour != nil {
+				out.WriteString(formatPct(usage.FiveHour.Utilization, remaining))
+			}
+		case 'S':
+			if usage.FiveHour != nil {
+				out.WriteString(formatReset(usage.FiveHour.ResetsAt, "3:04pm"))
+			}
+		case 'w':
+			if usage.SevenDay != nil {
+				out.WriteString(formatPct(usage.SevenDay.Utilization, remaining))
+			}
+		case 'W':
+			if usage.SevenDay != nil {
+				out.WriteString(formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"))
+			}
+		case '%':
+			out.WriteByte('%')
+		default:
+			out.WriteByte('%')
+			out.WriteByte(format[i])
+		}
+	}
+	return out.String()
+}
+
 func main() {
 	sessionPct := flag.Float64("s", 90, "show reset time when session usage exceeds this %")
 	weeklyPct := flag.Float64("w", 80, "show weekly usage when it exceeds this %")
 	alwaysWeekly := flag.Bool("W", false, "always show weekly usage")
 	remaining := flag.Bool("r", false, "show remaining capacity instead of usage")
 	jsonOutput := flag.Bool("j", false, "output usage as JSON")
+	formatStr := flag.String("f", "", "custom format string (verbs: %p plan, %s session%, %S session reset, %w weekly%, %W weekly reset, %% literal %)")
 	flag.Parse()
 
 	home, err := os.UserHomeDir()
@@ -254,6 +298,11 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println(s)
+		return
+	}
+
+	if *formatStr != "" {
+		fmt.Println(formatCustom(*formatStr, usage, creds.ClaudeAiOauth.SubscriptionType, *remaining))
 		return
 	}
 

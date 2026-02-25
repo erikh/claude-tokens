@@ -358,6 +358,174 @@ func TestFormatReset(t *testing.T) {
 	}
 }
 
+func TestFormatCustom(t *testing.T) {
+	reset5h := "2026-02-25T02:00:00.000000+00:00"
+	reset7d := "2026-03-03T07:00:00.000000+00:00"
+
+	fullUsage := usageResponse{
+		FiveHour: &usageBucket{Utilization: 45, ResetsAt: &reset5h},
+		SevenDay: &usageBucket{Utilization: 13, ResetsAt: &reset7d},
+	}
+
+	tests := []struct {
+		name      string
+		format    string
+		usage     usageResponse
+		plan      string
+		remaining bool
+		want      string
+		checkFn   func(string) bool // for timezone-dependent output
+	}{
+		{
+			name:   "plan verb",
+			format: "%p",
+			usage:  fullUsage,
+			plan:   "pro",
+			want:   "Pro",
+		},
+		{
+			name:   "session utilization verb",
+			format: "%s",
+			usage:  fullUsage,
+			plan:   "pro",
+			want:   "45%",
+		},
+		{
+			name:   "session reset verb",
+			format: "%S",
+			usage:  fullUsage,
+			plan:   "pro",
+			checkFn: func(s string) bool {
+				return s != "" // timezone-dependent, just check non-empty
+			},
+		},
+		{
+			name:   "weekly utilization verb",
+			format: "%w",
+			usage:  fullUsage,
+			plan:   "pro",
+			want:   "13%",
+		},
+		{
+			name:   "weekly reset verb",
+			format: "%W",
+			usage:  fullUsage,
+			plan:   "pro",
+			checkFn: func(s string) bool {
+				return s != ""
+			},
+		},
+		{
+			name:   "literal percent",
+			format: "%%",
+			usage:  fullUsage,
+			plan:   "pro",
+			want:   "%",
+		},
+		{
+			name:   "nil session bucket - session verbs empty",
+			format: "[%s][%S]",
+			usage:  usageResponse{SevenDay: &usageBucket{Utilization: 10}},
+			plan:   "pro",
+			want:   "[][]",
+		},
+		{
+			name:   "nil weekly bucket - weekly verbs empty",
+			format: "[%w][%W]",
+			usage:  usageResponse{FiveHour: &usageBucket{Utilization: 10}},
+			plan:   "pro",
+			want:   "[][]",
+		},
+		{
+			name:      "remaining mode session",
+			format:    "%s",
+			usage:     usageResponse{FiveHour: &usageBucket{Utilization: 45}},
+			plan:      "pro",
+			remaining: true,
+			want:      "55% left",
+		},
+		{
+			name:      "remaining mode weekly",
+			format:    "%w",
+			usage:     usageResponse{SevenDay: &usageBucket{Utilization: 13}},
+			plan:      "pro",
+			remaining: true,
+			want:      "87% left",
+		},
+		{
+			name:   "no reset time - session reset empty",
+			format: "[%S]",
+			usage:  usageResponse{FiveHour: &usageBucket{Utilization: 45}},
+			plan:   "pro",
+			want:   "[]",
+		},
+		{
+			name:   "no reset time - weekly reset empty",
+			format: "[%W]",
+			usage:  usageResponse{SevenDay: &usageBucket{Utilization: 13}},
+			plan:   "pro",
+			want:   "[]",
+		},
+		{
+			name:   "mixed text and verbs",
+			format: "%p: %s used",
+			usage:  fullUsage,
+			plan:   "pro",
+			want:   "Pro: 45% used",
+		},
+		{
+			name:   "unknown verb passes through",
+			format: "%x",
+			usage:  fullUsage,
+			plan:   "pro",
+			want:   "%x",
+		},
+		{
+			name:   "no verbs returns literal text",
+			format: "hello world",
+			usage:  fullUsage,
+			plan:   "pro",
+			want:   "hello world",
+		},
+		{
+			name:   "empty plan becomes Unknown",
+			format: "%p",
+			usage:  fullUsage,
+			plan:   "",
+			want:   "Unknown",
+		},
+		{
+			name:   "all nil buckets",
+			format: "%p %s %S %w %W",
+			usage:  usageResponse{},
+			plan:   "max",
+			want:   "Max    ",
+		},
+		{
+			name:   "trailing percent sign",
+			format: "test%",
+			usage:  fullUsage,
+			plan:   "pro",
+			want:   "test%",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatCustom(tt.format, tt.usage, tt.plan, tt.remaining)
+			if tt.checkFn != nil {
+				if !tt.checkFn(got) {
+					t.Errorf("formatCustom(%q) = %q, check failed", tt.format, got)
+				}
+				return
+			}
+			if got != tt.want {
+				t.Errorf("formatCustom(%q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFormatDisplay_AlwaysWeeklyOverridesThreshold(t *testing.T) {
 	// With alwaysWeekly, even low weekly usage should appear
 	usage := usageResponse{

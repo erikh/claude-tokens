@@ -29,7 +29,7 @@ go build -o claude-tokens .
 ## Usage
 
 ```
-claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j]
+claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j] [-f format]
 ```
 
 ### Flags
@@ -41,6 +41,7 @@ claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j]
 | `-W` | off     | Always show weekly usage (appended as `: Weekly: <pct>%`)                   |
 | `-r` | off     | Show remaining capacity instead of usage (e.g. `55% left` instead of `45%`) |
 | `-j` | off     | Output usage data as JSON                                                   |
+| `-f` | `""`    | Custom format string (see [Custom Format](#custom-format) below)            |
 
 ### Output
 
@@ -97,6 +98,32 @@ The fields are:
 - **week reset** -- when the 7-day window resets (only shown above threshold in bracket format)
 
 All reset times are displayed in your local timezone (human-readable output) or as raw RFC3339 timestamps (JSON output).
+
+### Custom Format
+
+The `-f` flag lets you compose a fully custom output string using printf-style format verbs. When `-f` is set, it takes precedence over the default display (but `-j` still takes precedence over everything).
+
+| Verb | Expands to | Example |
+|------|-----------|---------|
+| `%p` | Plan name (capitalized) | `Pro` |
+| `%s` | Session utilization | `45%` or `55% left` (respects `-r`) |
+| `%S` | Session reset time | `2:15pm` |
+| `%w` | Weekly utilization | `13%` or `87% left` (respects `-r`) |
+| `%W` | Weekly reset time | `Thu 10:30am` |
+| `%%` | Literal `%` | `%` |
+
+When a value is unavailable (nil bucket, no reset time), the verb expands to an empty string. Unknown verbs pass through as-is.
+
+```
+claude-tokens -f '%p: %s used, resets %S'
+# Pro: 45% used, resets 2:15pm
+
+claude-tokens -f 'Session: %s | Weekly: %w'
+# Session: 45% | Weekly: 13%
+
+claude-tokens -r -f '%p %s session, %w weekly'
+# Pro 55% left session, 87% left weekly
+```
 
 ### Examples
 
