@@ -1514,6 +1514,181 @@ func TestFormatCustom_ColorVerb(t *testing.T) {
 	}
 }
 
+func TestFormatCustom_PromptMode(t *testing.T) {
+	usage := usageResponse{
+		FiveHour: &usageBucket{Utilization: 45},
+		SevenDay: &usageBucket{Utilization: 13},
+	}
+
+	tests := []struct {
+		name       string
+		format     string
+		promptMode string
+		want       string
+	}{
+		// zsh mode
+		{
+			name:       "zsh: single color wrapped",
+			format:     "%{red}hello",
+			promptMode: "zsh",
+			want:       "%{\x1b[31m%}hello",
+		},
+		{
+			name:       "zsh: color with reset wrapped",
+			format:     "%{red}hello%{white with reset}",
+			promptMode: "zsh",
+			want:       "%{\x1b[31m%}hello%{\x1b[37;0m%}",
+		},
+		{
+			name:       "zsh: color around format verb",
+			format:     "%{green}%s%{white with reset}",
+			promptMode: "zsh",
+			want:       "%{\x1b[32m%}45%%%{\x1b[37;0m%}",
+		},
+		{
+			name:       "zsh: multiple colors",
+			format:     "%{red}R%{green}G%{blue}B",
+			promptMode: "zsh",
+			want:       "%{\x1b[31m%}R%{\x1b[32m%}G%{\x1b[34m%}B",
+		},
+		{
+			name:       "zsh: color with background wrapped",
+			format:     "%{white on red}alert%{white with reset}",
+			promptMode: "zsh",
+			want:       "%{\x1b[37;41m%}alert%{\x1b[37;0m%}",
+		},
+		// bash mode
+		{
+			name:       "bash: single color wrapped",
+			format:     "%{red}hello",
+			promptMode: "bash",
+			want:       "\001\x1b[31m\002hello",
+		},
+		{
+			name:       "bash: color with reset wrapped",
+			format:     "%{red}hello%{white with reset}",
+			promptMode: "bash",
+			want:       "\001\x1b[31m\002hello\001\x1b[37;0m\002",
+		},
+		{
+			name:       "bash: color around format verb",
+			format:     "%{green}%s%{white with reset}",
+			promptMode: "bash",
+			want:       "\001\x1b[32m\002" + "45%" + "\001\x1b[37;0m\002",
+		},
+		{
+			name:       "bash: multiple colors",
+			format:     "%{red}R%{green}G%{blue}B",
+			promptMode: "bash",
+			want:       "\001\x1b[31m\002R\001\x1b[32m\002G\001\x1b[34m\002B",
+		},
+		{
+			name:       "bash: color with background wrapped",
+			format:     "%{white on red}alert%{white with reset}",
+			promptMode: "bash",
+			want:       "\001\x1b[37;41m\002alert\001\x1b[37;0m\002",
+		},
+		// shared: empty/unknown specs not wrapped in either mode
+		{
+			name:       "zsh: empty color spec not wrapped",
+			format:     "%{}text",
+			promptMode: "zsh",
+			want:       "text",
+		},
+		{
+			name:       "bash: empty color spec not wrapped",
+			format:     "%{}text",
+			promptMode: "bash",
+			want:       "text",
+		},
+		{
+			name:       "zsh: unknown color not wrapped",
+			format:     "%{notacolor}text",
+			promptMode: "zsh",
+			want:       "text",
+		},
+		{
+			name:       "bash: unknown color not wrapped",
+			format:     "%{notacolor}text",
+			promptMode: "bash",
+			want:       "text",
+		},
+		// non-color verbs and borders unaffected
+		{
+			name:       "zsh: non-color verbs escaped",
+			format:     "%p: %s %w",
+			promptMode: "zsh",
+			want:       "Pro: 45%% 13%%",
+		},
+		{
+			name:       "bash: non-color verbs unaffected",
+			format:     "%p: %s %w",
+			promptMode: "bash",
+			want:       "Pro: 45% 13%",
+		},
+		{
+			name:       "zsh: borders with pct escaped",
+			format:     "%(s",
+			promptMode: "zsh",
+			want:       "(45%%)",
+		},
+		{
+			name:       "bash: borders unaffected",
+			format:     "%(s",
+			promptMode: "bash",
+			want:       "(45%)",
+		},
+		{
+			name:       "zsh: literal percent escaped",
+			format:     "%%",
+			promptMode: "zsh",
+			want:       "%%",
+		},
+		{
+			name:       "bash: literal percent unaffected",
+			format:     "%%",
+			promptMode: "bash",
+			want:       "%",
+		},
+		// brackets with colors in prompt modes
+		{
+			name:       "zsh: bracket border with surrounding colors",
+			format:     "%{cyan}%[s%{white with reset}",
+			promptMode: "zsh",
+			want:       "%{\x1b[36m%}[45%%]%{\x1b[37;0m%}",
+		},
+		{
+			name:       "bash: bracket border with surrounding colors",
+			format:     "%{cyan}%[s%{white with reset}",
+			promptMode: "bash",
+			want:       "\001\x1b[36m\002[45%]\001\x1b[37;0m\002",
+		},
+		{
+			name:       "zsh: bracket border between two colors",
+			format:     "%{red}%[s%{green}%[w%{white with reset}",
+			promptMode: "zsh",
+			want:       "%{\x1b[31m%}[45%%]%{\x1b[32m%}[13%%]%{\x1b[37;0m%}",
+		},
+		// no prompt mode: raw ANSI (default behavior)
+		{
+			name:       "raw: no wrapping",
+			format:     "%{red}hello%{white with reset}",
+			promptMode: "",
+			want:       "\x1b[31mhello\x1b[37;0m",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := displayOptions{sessionPct: 90, weeklyPct: 80, promptMode: tt.promptMode}
+			got := formatCustom(tt.format, usage, "pro", opts)
+			if got != tt.want {
+				t.Errorf("formatCustom(%q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRefreshToken_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

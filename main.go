@@ -210,6 +210,7 @@ type displayOptions struct {
 	weeklyPct    float64
 	alwaysWeekly bool
 	remaining    bool
+	promptMode   string
 }
 
 func formatPct(utilization float64, remaining bool) string {
@@ -419,6 +420,15 @@ func formatCustom(format string, usage usageResponse, plan string, opts displayO
 		plan = strings.ToUpper(plan[:1]) + plan[1:]
 	}
 
+	// zshText escapes % as %% when in zsh prompt mode, so zsh doesn't
+	// interpret content characters as prompt escapes.
+	zshText := func(s string) string {
+		if opts.promptMode == "zsh" {
+			return strings.ReplaceAll(s, "%", "%%")
+		}
+		return s
+	}
+
 	var out strings.Builder
 	for i := 0; i < len(format); i++ {
 		if format[i] != '%' || i+1 >= len(format) {
@@ -432,12 +442,21 @@ func formatCustom(format string, usage usageResponse, plan string, opts displayO
 			end := strings.IndexByte(format[i:], '}')
 			if end != -1 {
 				spec := format[i+1 : i+end]
-				out.WriteString(colorSpec(spec))
+				code := colorSpec(spec)
+				if code != "" {
+					switch opts.promptMode {
+					case "zsh":
+						code = "%{" + code + "%}"
+					case "bash":
+						code = "\001" + code + "\002"
+					}
+				}
+				out.WriteString(code)
 				i += end
 				continue
 			}
 			// no closing brace, pass through literally
-			out.WriteString("%{")
+			out.WriteString(zshText("%{"))
 			continue
 		}
 
@@ -445,8 +464,7 @@ func formatCustom(format string, usage usageResponse, plan string, opts displayO
 		verbIdx := findVerb(format, i)
 		if verbIdx < 0 {
 			// no verb found, output everything literally
-			out.WriteByte('%')
-			out.WriteString(format[i:])
+			out.WriteString(zshText("%" + format[i:]))
 			i = len(format) - 1
 			continue
 		}
@@ -493,17 +511,15 @@ func formatCustom(format string, usage usageResponse, plan string, opts displayO
 				}
 			}
 		case '%':
-			out.WriteByte('%')
+			out.WriteString(zshText("%"))
 			continue
 		default:
-			out.WriteByte('%')
-			out.WriteString(modifier)
-			out.WriteByte(format[i])
+			out.WriteString(zshText("%" + modifier + string(format[i])))
 			continue
 		}
 
 		if content != "" {
-			out.WriteString(open + content + close)
+			out.WriteString(zshText(open + content + close))
 		}
 	}
 	return out.String()
@@ -521,7 +537,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "              %%w weekly%%, %%W weekly reset, %%T weekly reset (threshold), %%%% literal %%\n")
 		fmt.Fprintf(os.Stderr, "Color:        %%{fg [on bg] [with attr ...]}  (colt-style color spec)\n")
 		fmt.Fprintf(os.Stderr, "Border:       %%<chars><verb> to enclose output; right side is mirrored & reversed\n")
-		fmt.Fprintf(os.Stderr, "              Paired chars: ( ) [ ] < > « » ‹ › ← → ⟨ ⟩ ◀ ▶ and more\n\n")
+		fmt.Fprintf(os.Stderr, "              Paired chars: ( ) [ ] < > « » ‹ › ← → ⟨ ⟩ ◀ ▶ and more\n")
+		fmt.Fprintf(os.Stderr, "Prompt:       -p zsh wraps ANSI in %%{...%%}, -p bash wraps in \\001...\\002\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -530,7 +547,13 @@ func main() {
 	alwaysWeekly := flag.Bool("W", false, "always show weekly usage")
 	remaining := flag.Bool("r", false, "show remaining capacity instead of usage")
 	jsonOutput := flag.Bool("j", false, "output usage as JSON")
+	promptMode := flag.String("p", "", "wrap ANSI codes for prompt use: zsh or bash")
 	flag.Parse()
+
+	if *promptMode != "" && *promptMode != "zsh" && *promptMode != "bash" {
+		fmt.Fprintf(os.Stderr, "error: -p must be 'zsh' or 'bash', got %q\n", *promptMode)
+		os.Exit(1)
+	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -597,6 +620,7 @@ func main() {
 		weeklyPct:    *weeklyPct,
 		alwaysWeekly: *alwaysWeekly,
 		remaining:    *remaining,
+		promptMode:   *promptMode,
 	}
 
 	if args := flag.Args(); len(args) > 0 {

@@ -29,7 +29,7 @@ go build -o claude-tokens .
 ## Usage
 
 ```
-claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j] [FORMAT ...]
+claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j] [-p shell] [FORMAT ...]
 ```
 
 Any arguments after the flags are joined with spaces and used as a custom format string (see [Custom Format](#custom-format) below). If no arguments are given, the default display is used.
@@ -43,6 +43,7 @@ Any arguments after the flags are joined with spaces and used as a custom format
 | `-W` | off     | Always show weekly usage (appended as `: Weekly: <pct>%`)                   |
 | `-r` | off     | Show remaining capacity instead of usage (e.g. `55% left` instead of `45%`) |
 | `-j` | off     | Output usage data as JSON                                                   |
+| `-p` | off     | Wrap ANSI codes for prompt use: `zsh` (`%{...%}`) or `bash` (`\001...\002`) |
 
 ### Output
 
@@ -208,6 +209,33 @@ claude-tokens '%{white on red with bold}%s%{white with reset}'
 # Session usage in bold white on red background
 ```
 
+### Prompt Escaping
+
+When embedding `claude-tokens` output in a shell prompt (e.g. zsh `RPROMPT` or bash `PS1`), ANSI escape sequences must be marked as non-printing so the shell can calculate the correct cursor position. Without this, the shell counts escape bytes as visible characters and miscalculates the prompt width, causing display corruption.
+
+The `-p` flag wraps all ANSI color codes emitted by `%{spec}` in the appropriate markers:
+
+| Mode        | Wrapping          | Use case                          |
+| ----------- | ----------------- | --------------------------------- |
+| `-p zsh`    | `%{` ... `%}`     | zsh prompts (`PROMPT`, `RPROMPT`) |
+| `-p bash`   | `\001` ... `\002` | bash `PS1` / readline prompts     |
+| _(default)_ | _(none)_          | Terminals, status bars, scripts   |
+
+In `-p zsh` mode, `%` characters in content (e.g. the `%` in `45%`) are also escaped as `%%` so the output can be used directly in zsh prompt strings without additional post-processing. Color wrappers (`%{...%}`) are emitted verbatim for zsh to interpret.
+
+```
+# zsh — colors wrapped in %{...%}, content % escaped as %%
+claude-tokens -p zsh '%{cyan}%[s%{white with reset}'
+# output: %{\x1b[36m%}[45%%]%{\x1b[37;0m%}
+# zsh renders: [45%] in cyan with correct cursor position
+
+# bash — colors wrapped in \001...\002 for correct PS1 width
+claude-tokens -p bash '%{cyan}%[s%{white with reset}'
+
+# raw — no wrapping, for terminal output or status bars
+claude-tokens '%{cyan}%[s%{white with reset}'
+```
+
 ### Examples
 
 Show reset times earlier (when session hits 70% used, weekly hits 50%):
@@ -297,7 +325,7 @@ case $TERM in
             time=$(date -d "$(stat /tmp/tokens | grep Modify | awk -F: '{ print $2":"$3":"$4 }')" +%s)
             if [ $? -ne 0 ] || [ $(($time + 300)) -lt $(date +%s) ]
             then
-              claude-tokens '%{cyan}Cur: %{bold white}%[s%{reset}%{bright red}%!t%{reset} %{yellow}Week: %{bold white}%[w%{reset}%{bright red}%!!T%{reset}' | perl -pe 's/%/%%/g' >/tmp/tokens
+              claude-tokens -p zsh '%{cyan}Cur: %{bold white}%[s%{reset}%{bright red}%!t%{reset} %{yellow}Week: %{bold white}%[w%{reset}%{bright red}%!!T%{reset}' >/tmp/tokens
             fi
 
             export TOKENS=$(cat /tmp/tokens)
