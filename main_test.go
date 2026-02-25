@@ -2,6 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -553,6 +557,194 @@ func TestFormatDisplay_WeeklyExactThreshold(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+}
+
+func TestStripTermCodes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain text unchanged", "hello world", "hello world"},
+		{"CSI color code", "\x1b[31mred\x1b[0m", "red"},
+		{"OSC title stripped", "\x1b]0;title\x1b\\", ""},
+		{"OSC palette stripped", "\x1b]4;0;#272822\x1b\\", ""},
+		{"text around OSC", "before\x1b]0;title\x1b\\after", "beforeafter"},
+		{"mixed codes and text", "\x1b[1mClaude\x1b[0m Pro 45%", "Claude Pro 45%"},
+		{"empty string", "", ""},
+		{"no codes", "Claude Pro 45%", "Claude Pro 45%"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripTermCodes(tt.input)
+			if got != tt.want {
+				t.Errorf("stripTermCodes(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripTermCodes_CharsetAndTwoChar(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"charset select", "\x1b(Btext", "text"},
+		{"two-char escape", "\x1bMtext", "text"},
+		{"BEL-terminated OSC", "\x1b]0;title\x07text", "text"},
+		{"multiple mixed sequences", "\x1b[1m\x1b]0;t\x07\x1b(Bhello\x1b[0m", "hello"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripTermCodes(tt.input)
+			if got != tt.want {
+				t.Errorf("stripTermCodes(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRefreshToken_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "new-access",
+			"refresh_token": "new-refresh",
+			"expires_in":    3600,
+		})
+	}))
+	defer srv.Close()
+
+	oldEndpoint := tokenEndpoint
+	tokenEndpoint = srv.URL
+	defer func() { tokenEndpoint = oldEndpoint }()
+
+	dir := t.TempDir()
+	credsPath := filepath.Join(dir, "creds.json")
+
+	creds := &credentials{
+		ClaudeAiOauth: oauthCredentials{
+			AccessToken:  "old-access",
+			RefreshToken: "old-refresh",
+		},
+	}
+
+	if err := refreshToken(creds, credsPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if creds.ClaudeAiOauth.AccessToken != "new-access" {
+		t.Errorf("access token = %q, want %q", creds.ClaudeAiOauth.AccessToken, "new-access")
+	}
+	if creds.ClaudeAiOauth.RefreshToken != "new-refresh" {
+		t.Errorf("refresh token = %q, want %q", creds.ClaudeAiOauth.RefreshToken, "new-refresh")
+	}
+	if creds.ClaudeAiOauth.ExpiresAt == 0 {
+		t.Error("expected ExpiresAt to be set")
+	}
+
+	data, err := os.ReadFile(credsPath)
+	if err != nil {
+		t.Fatalf("reading saved credentials: %v", err)
+	}
+	var saved credentials
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("parsing saved credentials: %v", err)
+	}
+	if saved.ClaudeAiOauth.AccessToken != "new-access" {
+		t.Errorf("saved access token = %q, want %q", saved.ClaudeAiOauth.AccessToken, "new-access")
+	}
+}
+
+func TestRefreshToken_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	oldEndpoint := tokenEndpoint
+	tokenEndpoint = srv.URL
+	defer func() { tokenEndpoint = oldEndpoint }()
+
+	creds := &credentials{
+		ClaudeAiOauth: oauthCredentials{
+			RefreshToken: "some-token",
+		},
+	}
+
+	err := refreshToken(creds, "/dev/null")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := err.Error(); !contains(got, "refresh failed") {
+		t.Errorf("error = %q, want it to contain %q", got, "refresh failed")
+	}
+}
+
+func TestRefreshToken_BadJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	oldEndpoint := tokenEndpoint
+	tokenEndpoint = srv.URL
+	defer func() { tokenEndpoint = oldEndpoint }()
+
+	creds := &credentials{
+		ClaudeAiOauth: oauthCredentials{
+			RefreshToken: "some-token",
+		},
+	}
+
+	err := refreshToken(creds, "/dev/null")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := err.Error(); !contains(got, "parsing refresh response") {
+		t.Errorf("error = %q, want it to contain %q", got, "parsing refresh response")
+	}
+}
+
+func TestRefreshToken_ConnectionError(t *testing.T) {
+	oldEndpoint := tokenEndpoint
+	tokenEndpoint = "http://127.0.0.1:1" // nothing listening
+	defer func() { tokenEndpoint = oldEndpoint }()
+
+	creds := &credentials{
+		ClaudeAiOauth: oauthCredentials{
+			RefreshToken: "some-token",
+		},
+	}
+
+	err := refreshToken(creds, "/dev/null")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := err.Error(); !contains(got, "refresh request failed") {
+		t.Errorf("error = %q, want it to contain %q", got, "refresh request failed")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchString(s, substr)
+}
+
+func searchString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func TestFormatDisplay_SessionExactThreshold(t *testing.T) {

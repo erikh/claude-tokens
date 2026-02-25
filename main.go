@@ -9,11 +9,25 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
+var ansiRe = regexp.MustCompile(
+	`\x1b\[[0-9;]*[a-zA-Z]` + // CSI sequences: \e[...m, \e[...H, etc.
+		`|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)` + // OSC sequences: \e]...BEL or \e]...\e\\
+		`|\x1b[()#][0-9A-Za-z]` + // charset select
+		`|\x1b[a-zA-Z]`, // two-char escapes like \eM, \eD
+)
+
+func stripTermCodes(s string) string {
+	return ansiRe.ReplaceAllString(s, "")
+}
+
 const oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+
+var tokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 
 type oauthCredentials struct {
 	AccessToken      string   `json:"accessToken"`
@@ -62,7 +76,7 @@ func refreshToken(creds *credentials, credsPath string) error {
 	})
 
 	resp, err := http.Post(
-		"https://console.anthropic.com/v1/oauth/token",
+		tokenEndpoint,
 		"application/json",
 		bytes.NewReader(body),
 	)
@@ -223,12 +237,19 @@ func formatCustom(format string, usage usageResponse, plan string, remaining boo
 }
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [FORMAT ...]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Trailing arguments are joined and used as a format string.\n")
+		fmt.Fprintf(os.Stderr, "Format verbs: %%p plan, %%s session%%, %%S session reset,\n")
+		fmt.Fprintf(os.Stderr, "              %%w weekly%%, %%W weekly reset, %%%% literal %%\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		flag.PrintDefaults()
+	}
 	sessionPct := flag.Float64("s", 90, "show reset time when session usage exceeds this %")
 	weeklyPct := flag.Float64("w", 80, "show weekly usage when it exceeds this %")
 	alwaysWeekly := flag.Bool("W", false, "always show weekly usage")
 	remaining := flag.Bool("r", false, "show remaining capacity instead of usage")
 	jsonOutput := flag.Bool("j", false, "output usage as JSON")
-	formatStr := flag.String("f", "", "custom format string (verbs: %p plan, %s session%, %S session reset, %w weekly%, %W weekly reset, %% literal %)")
 	flag.Parse()
 
 	home, err := os.UserHomeDir()
@@ -291,18 +312,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	if args := flag.Args(); len(args) > 0 {
+		formatStr := strings.Join(args, " ")
+		fmt.Print(stripTermCodes(formatCustom(formatStr, usage, creds.ClaudeAiOauth.SubscriptionType, *remaining)))
+		return
+	}
+
 	if *jsonOutput {
 		s, err := formatJSON(usage)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error marshaling JSON: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println(s)
-		return
-	}
-
-	if *formatStr != "" {
-		fmt.Println(formatCustom(*formatStr, usage, creds.ClaudeAiOauth.SubscriptionType, *remaining))
+		fmt.Print(stripTermCodes(s))
 		return
 	}
 
@@ -312,5 +334,5 @@ func main() {
 		alwaysWeekly: *alwaysWeekly,
 		remaining:    *remaining,
 	}
-	fmt.Println(formatDisplay(usage, creds.ClaudeAiOauth.SubscriptionType, opts))
+	fmt.Print(stripTermCodes(formatDisplay(usage, creds.ClaudeAiOauth.SubscriptionType, opts)))
 }

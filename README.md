@@ -29,8 +29,10 @@ go build -o claude-tokens .
 ## Usage
 
 ```
-claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j] [-f format]
+claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j] [FORMAT ...]
 ```
+
+Any arguments after the flags are joined with spaces and used as a custom format string (see [Custom Format](#custom-format) below). If no arguments are given, the default display is used.
 
 ### Flags
 
@@ -41,7 +43,6 @@ claude-tokens [-s threshold] [-w threshold] [-W] [-r] [-j] [-f format]
 | `-W` | off     | Always show weekly usage (appended as `: Weekly: <pct>%`)                   |
 | `-r` | off     | Show remaining capacity instead of usage (e.g. `55% left` instead of `45%`) |
 | `-j` | off     | Output usage data as JSON                                                   |
-| `-f` | `""`    | Custom format string (see [Custom Format](#custom-format) below)            |
 
 ### Output
 
@@ -101,7 +102,7 @@ All reset times are displayed in your local timezone (human-readable output) or 
 
 ### Custom Format
 
-The `-f` flag lets you compose a fully custom output string using printf-style format verbs. When `-f` is set, it takes precedence over the default display (but `-j` still takes precedence over everything).
+Any trailing arguments are joined with spaces and interpreted as a format string using printf-style verbs. When a format string is provided, it takes precedence over the default display and flags like `-s`, `-w`, `-W` (but `-j` still takes precedence over everything). The `-r` flag is respected by format verbs.
 
 | Verb | Expands to | Example |
 |------|-----------|---------|
@@ -115,15 +116,20 @@ The `-f` flag lets you compose a fully custom output string using printf-style f
 When a value is unavailable (nil bucket, no reset time), the verb expands to an empty string. Unknown verbs pass through as-is.
 
 ```
-claude-tokens -f '%p: %s used, resets %S'
+claude-tokens '%p: %s used, resets %S'
 # Pro: 45% used, resets 2:15pm
 
-claude-tokens -f 'Session: %s | Weekly: %w'
+claude-tokens 'Session: %s | Weekly: %w'
 # Session: 45% | Weekly: 13%
 
-claude-tokens -r -f '%p %s session, %w weekly'
+claude-tokens -r '%p %s session, %w weekly'
 # Pro 55% left session, 87% left weekly
+
+claude-tokens %p %s %w
+# Pro 45% 13%
 ```
+
+Note that shell quoting is optional — unquoted arguments are joined with spaces automatically. Use quotes if your format contains characters the shell might interpret.
 
 ### Examples
 
@@ -210,16 +216,17 @@ case $TERM in
       export TERM=tmux-256color
     ;;
     *)
-      time=$(date -d "$(stat /tmp/tokens | grep Modify | awk -F: '{ print $2":"$3":"$4 }')" +%s)
-      if [ $? -ne 0 ] || [ $(($time + 300)) -lt $(date +%s) ]
-      then
-        claude-tokens >/tmp/tokens
-      fi
-        export TOKENS=$(cat /tmp/tokens)
-        export RPROMPT="[%B$TOKENS%%b][%B%T%b]%b"
-
         precmd() {
-            case $TERM in
+            time=$(date -d "$(stat /tmp/tokens | grep Modify | awk -F: '{ print $2":"$3":"$4 }')" +%s)
+            if [ $? -ne 0 ] || [ $(($time + 300)) -lt $(date +%s) ]
+            then
+              claude-tokens Cur: %s Week: %w | perl -pe 's/%/%%/g' >/tmp/tokens
+            fi
+
+            export TOKENS=$(cat /tmp/tokens)
+            export RPROMPT="[%B$TOKENS%b][%B%T%b]"
+
+            case $TERM in 
                 tmux-256color)
                     print -Pn "\ek$PROMPT\e\\"
                     ;;
@@ -231,15 +238,15 @@ case $TERM in
             esac
         }
 
-        preexec() {
+        preexec() { 
             case $TERM in
                 tmux-256color)
-                    print -Pn "\ek$1\e\\"
+                    print -Pn "\ek$1\e\\" 
                     ;;
                 vt100)
                     ;;
                 *)
-                    print -Pn "\e]0;$1\e\\"
+                    print -Pn "\e]0;$1\e\\" 
                     ;;
             esac
         }
