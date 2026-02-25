@@ -85,7 +85,16 @@ Claude Pro 55% left: Weekly: 87% left
 With `-j`, output is JSON containing both session and weekly utilization percentages with their reset times:
 
 ```json
-{"session":{"utilization":30,"resets_at":"2026-02-25T02:00:00.596989+00:00"},"weekly":{"utilization":13,"resets_at":"2026-03-03T07:00:00.597012+00:00"}}
+{
+    "session": {
+        "utilization": 30,
+        "resets_at": "2026-02-25T02:00:00.596989+00:00"
+    },
+    "weekly": {
+        "utilization": 13,
+        "resets_at": "2026-03-03T07:00:00.597012+00:00"
+    }
+}
 ```
 
 Fields are omitted from JSON when the corresponding usage bucket is unavailable. Reset times are omitted when not present.
@@ -104,18 +113,47 @@ All reset times are displayed in your local timezone (human-readable output) or 
 
 Any trailing arguments are joined with spaces and interpreted as a format string using printf-style verbs. When a format string is provided, it takes precedence over the default display and flags like `-s`, `-w`, `-W` (but `-j` still takes precedence over everything). The `-r` flag is respected by format verbs.
 
-| Verb | Expands to | Example |
-|------|-----------|---------|
-| `%p` | Plan name (capitalized) | `Pro` |
-| `%s` | Session utilization | `45%` or `55% left` (respects `-r`) |
-| `%S` | Session reset time (always) | `2:15pm` |
-| `%t` | Session reset time (only when usage >= `-s` threshold) | `2:15pm` or empty |
-| `%w` | Weekly utilization | `13%` or `87% left` (respects `-r`) |
-| `%W` | Weekly reset time (always) | `Thu 10:30am` |
-| `%T` | Weekly reset time (only when usage >= `-w` threshold) | `Thu 10:30am` or empty |
-| `%%` | Literal `%` | `%` |
+| Verb      | Expands to                                        | Example                             |
+| --------- | ------------------------------------------------- | ----------------------------------- |
+| `%p`      | Plan name (capitalized)                           | `Pro`                               |
+| `%s`      | Session utilization                               | `45%` or `55% left` (respects `-r`) |
+| `%S`      | Session reset time (always)                       | `2:15pm`                            |
+| `%t`      | Session reset (only when usage >= `-s` threshold) | `resets 2:15pm` or empty            |
+| `%w`      | Weekly utilization                                | `13%` or `87% left` (respects `-r`) |
+| `%W`      | Weekly reset time (always)                        | `Thu 10:30am`                       |
+| `%T`      | Weekly reset (only when usage >= `-w` threshold)  | `resets Thu 10:30am` or empty       |
+| `%%`      | Literal `%`                                       | `%`                                 |
+| `%{spec}` | ANSI color escape (see [Colors](#colors) below)   | `\x1b[31m`                          |
 
-When a value is unavailable (nil bucket, no reset time), the verb expands to an empty string. The `%t` and `%T` verbs also expand to an empty string when usage is below the corresponding threshold. Unknown verbs pass through as-is.
+**Borders:** Any characters placed between `%` and a verb act as a border that wraps the output. The left (opening) side uses the characters as-is; the right (closing) side mirrors paired characters and reverses the string. Borders work with all format verbs.
+
+Paired characters that get mirrored:
+
+| ASCII                           | Unicode                                                          |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `(` ↔ `)`, `[` ↔ `]`, `<` ↔ `>` | `«` ↔ `»`, `‹` ↔ `›`, `⟨` ↔ `⟩`                                  |
+|                                 | `←` ↔ `→`, `⇐` ↔ `⇒`, `⟵` ↔ `⟶`, `⟸` ↔ `⟹`                       |
+|                                 | `◀` ↔ `▶`, `◁` ↔ `▷`, `◂` ↔ `▸`, `◃` ↔ `▹`, `▲` ↔ `▼`, `△` ↔ `▽` |
+|                                 | `❨` ↔ `❩`, `❪` ↔ `❫`, `❬` ↔ `❭`, `❮` ↔ `❯`, `❰` ↔ `❱`            |
+|                                 | `⌈` ↔ `⌉`, `⌊` ↔ `⌋`                                             |
+
+Non-paired characters repeat unchanged. `{` is reserved for color specs.
+
+| Format   | Output        | Description                                      |
+| -------- | ------------- | ------------------------------------------------ |
+| `%s`     | `45%`         | No border                                        |
+| `%(s`    | `(45%)`       | Parentheses                                      |
+| `%[s`    | `[45%]`       | Brackets                                         |
+| `%-=s`   | `-=45%=-`     | Multi-char, reversed                             |
+| `%-=[s`  | `-=[45%]=-`   | `[` mirrors to `]`, then reversed                |
+| `%<<(s`  | `<<(45%)>>`   | `(` mirrors to `)`, `<` mirrors to `>`, reversed |
+| `%«s`    | `«45%»`       | Unicode guillemets                               |
+| `%⟨s`    | `⟨45%⟩`       | Mathematical angle brackets                      |
+| `%◀s`    | `◀45%▶`       | Unicode triangles                                |
+| `%←s`    | `←45%→`       | Unicode arrows                                   |
+| `%«-=[s` | `«-=[45%]=-»` | Mixed Unicode and ASCII                          |
+
+For `%t` and `%T`, the border only appears when usage meets the threshold — below threshold, the entire verb (including borders) disappears cleanly. Unknown verbs pass through as-is.
 
 ```
 claude-tokens '%p: %s used, resets %S'
@@ -130,12 +168,45 @@ claude-tokens -r '%p %s session, %w weekly'
 claude-tokens %p %s %w
 # Pro 45% 13%
 
-claude-tokens -s 50 '%s (resets %t)'
+claude-tokens -s 50 '%s %(t'
 # 60% (resets 2:15pm)    — when session >= 50%
-# 30%  (resets )          — when session < 50%, %t is empty
+# 30%                    — when session < 50%, %(t disappears entirely
+
+claude-tokens -s 50 '%s %-=[t'
+# 60% -=[resets 2:15pm]=-    — multi-char border with bracket mirroring
+
+claude-tokens '%«p %⟨s'
+# «Pro» ⟨45%⟩    — Unicode borders on any verb
 ```
 
 Note that shell quoting is optional — unquoted arguments are joined with spaces automatically. Use quotes if your format contains characters the shell might interpret.
+
+### Colors
+
+The `%{spec}` verb generates ANSI terminal color escape sequences using the same grammar as [colt](https://github.com/erikh/colt):
+
+```
+%{foreground [on background] [with attr ...]}
+```
+
+**Available colors** (for both foreground and background):
+
+`black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `hiblack`, `hired`, `higreen`, `hiyellow`, `hiblue`, `himagenta`, `hicyan`, `hiwhite`
+
+**Available attributes** (after `with`):
+
+`reset`, `bold`, `faint`, `italic`, `underline`, `blinkslow`, `blinkrapid`, `reversevideo`, `concealed`, `crossedout`
+
+```
+claude-tokens '%{red}%p %s%{white with reset}'
+# Outputs plan and session usage in red, then resets
+
+claude-tokens '%{green with bold}%s%{white with reset} %{yellow}%w%{white with reset}'
+# Session in bold green, weekly in yellow
+
+claude-tokens '%{white on red with bold}%s%{white with reset}'
+# Session usage in bold white on red background
+```
 
 ### Examples
 
@@ -226,13 +297,13 @@ case $TERM in
             time=$(date -d "$(stat /tmp/tokens | grep Modify | awk -F: '{ print $2":"$3":"$4 }')" +%s)
             if [ $? -ne 0 ] || [ $(($time + 300)) -lt $(date +%s) ]
             then
-              claude-tokens Cur: %s Week: %w | perl -pe 's/%/%%/g' >/tmp/tokens
+              claude-tokens '%{cyan}Cur: %{bold white}%[s%{reset}%{bright red}%!t%{reset} %{yellow}Week: %{bold white}%[w%{reset}%{bright red}%!!T%{reset}' | perl -pe 's/%/%%/g' >/tmp/tokens
             fi
 
             export TOKENS=$(cat /tmp/tokens)
             export RPROMPT="[%B$TOKENS%b][%B%T%b]"
 
-            case $TERM in 
+            case $TERM in
                 tmux-256color)
                     print -Pn "\ek$PROMPT\e\\"
                     ;;
@@ -244,15 +315,15 @@ case $TERM in
             esac
         }
 
-        preexec() { 
+        preexec() {
             case $TERM in
                 tmux-256color)
-                    print -Pn "\ek$1\e\\" 
+                    print -Pn "\ek$1\e\\"
                     ;;
                 vt100)
                     ;;
                 *)
-                    print -Pn "\e]0;$1\e\\" 
+                    print -Pn "\e]0;$1\e\\"
                     ;;
             esac
         }

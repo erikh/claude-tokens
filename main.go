@@ -9,20 +9,107 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/fatih/color"
 )
 
-var ansiRe = regexp.MustCompile(
-	`\x1b\[[0-9;]*[a-zA-Z]` + // CSI sequences: \e[...m, \e[...H, etc.
-		`|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)` + // OSC sequences: \e]...BEL or \e]...\e\\
-		`|\x1b[()#][0-9A-Za-z]` + // charset select
-		`|\x1b[a-zA-Z]`, // two-char escapes like \eM, \eD
-)
+var colorMap = map[string]color.Attribute{
+	"black":     color.FgBlack,
+	"red":       color.FgRed,
+	"green":     color.FgGreen,
+	"yellow":    color.FgYellow,
+	"blue":      color.FgBlue,
+	"magenta":   color.FgMagenta,
+	"cyan":      color.FgCyan,
+	"white":     color.FgWhite,
+	"hiblack":   color.FgHiBlack,
+	"hired":     color.FgHiRed,
+	"higreen":   color.FgHiGreen,
+	"hiyellow":  color.FgHiYellow,
+	"hiblue":    color.FgHiBlue,
+	"himagenta": color.FgHiMagenta,
+	"hicyan":    color.FgHiCyan,
+	"hiwhite":   color.FgHiWhite,
+}
 
-func stripTermCodes(s string) string {
-	return ansiRe.ReplaceAllString(s, "")
+var bgColorMap = map[string]color.Attribute{
+	"black":     color.BgBlack,
+	"red":       color.BgRed,
+	"green":     color.BgGreen,
+	"yellow":    color.BgYellow,
+	"blue":      color.BgBlue,
+	"magenta":   color.BgMagenta,
+	"cyan":      color.BgCyan,
+	"white":     color.BgWhite,
+	"hiblack":   color.BgHiBlack,
+	"hired":     color.BgHiRed,
+	"higreen":   color.BgHiGreen,
+	"hiyellow":  color.BgHiYellow,
+	"hiblue":    color.BgHiBlue,
+	"himagenta": color.BgHiMagenta,
+	"hicyan":    color.BgHiCyan,
+	"hiwhite":   color.BgHiWhite,
+}
+
+var attrMap = map[string]color.Attribute{
+	"reset":        color.Reset,
+	"bold":         color.Bold,
+	"faint":        color.Faint,
+	"italic":       color.Italic,
+	"underline":    color.Underline,
+	"blinkslow":    color.BlinkSlow,
+	"blinkrapid":   color.BlinkRapid,
+	"reversevideo": color.ReverseVideo,
+	"concealed":    color.Concealed,
+	"crossedout":   color.CrossedOut,
+}
+
+// colorSpec parses a colt-style color specification and returns the ANSI escape sequence.
+// Grammar: "fg [on bg] [with attr ...]"
+func colorSpec(spec string) string {
+	words := strings.Fields(spec)
+	if len(words) == 0 {
+		return ""
+	}
+
+	var codes []string
+
+	fg := words[0]
+	if a, ok := colorMap[fg]; ok {
+		codes = append(codes, fmt.Sprintf("%d", a))
+	}
+
+	i := 1
+	for i < len(words) {
+		switch words[i] {
+		case "on":
+			i++
+			if i < len(words) {
+				if a, ok := bgColorMap[words[i]]; ok {
+					codes = append(codes, fmt.Sprintf("%d", a))
+				}
+				i++
+			}
+		case "with":
+			i++
+			for i < len(words) {
+				if a, ok := attrMap[words[i]]; ok {
+					codes = append(codes, fmt.Sprintf("%d", a))
+				}
+				i++
+			}
+		default:
+			i++
+		}
+	}
+
+	if len(codes) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("\x1b[%sm", strings.Join(codes, ";"))
 }
 
 const oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -83,7 +170,7 @@ func refreshToken(creds *credentials, credsPath string) error {
 	if err != nil {
 		return fmt.Errorf("refresh request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -193,6 +280,138 @@ func formatDisplay(usage usageResponse, plan string, opts displayOptions) string
 	return out
 }
 
+// mirrorRune returns the mirrored counterpart of paired Unicode characters.
+// Parentheses, brackets, angle brackets, arrows, triangles, and other
+// directional or paired glyphs are mapped to their mirror image.
+func mirrorRune(r rune) rune {
+	switch r {
+	case '(':
+		return ')'
+	case ')':
+		return '('
+	case '[':
+		return ']'
+	case ']':
+		return '['
+	case '<':
+		return '>'
+	case '>':
+		return '<'
+	// unicode arrows
+	case '←':
+		return '→'
+	case '→':
+		return '←'
+	case '⇐':
+		return '⇒'
+	case '⇒':
+		return '⇐'
+	case '⟵':
+		return '⟶'
+	case '⟶':
+		return '⟵'
+	case '⟸':
+		return '⟹'
+	case '⟹':
+		return '⟸'
+	// unicode triangles
+	case '◀':
+		return '▶'
+	case '▶':
+		return '◀'
+	case '◁':
+		return '▷'
+	case '▷':
+		return '◁'
+	case '◂':
+		return '▸'
+	case '▸':
+		return '◂'
+	case '◃':
+		return '▹'
+	case '▹':
+		return '◃'
+	case '▲':
+		return '▼'
+	case '▼':
+		return '▲'
+	case '△':
+		return '▽'
+	case '▽':
+		return '△'
+	// unicode angle brackets and chevrons
+	case '⟨':
+		return '⟩'
+	case '⟩':
+		return '⟨'
+	case '❨':
+		return '❩'
+	case '❩':
+		return '❨'
+	case '❪':
+		return '❫'
+	case '❫':
+		return '❪'
+	case '❬':
+		return '❭'
+	case '❭':
+		return '❬'
+	case '❮':
+		return '❯'
+	case '❯':
+		return '❮'
+	case '❰':
+		return '❱'
+	case '❱':
+		return '❰'
+	case '«':
+		return '»'
+	case '»':
+		return '«'
+	case '‹':
+		return '›'
+	case '›':
+		return '‹'
+	// mathematical/misc paired
+	case '⌈':
+		return '⌉'
+	case '⌉':
+		return '⌈'
+	case '⌊':
+		return '⌋'
+	case '⌋':
+		return '⌊'
+	default:
+		return r
+	}
+}
+
+// reverseModifier builds the closing delimiter from a modifier string.
+// Each rune is replaced with its mirror counterpart, then the entire
+// string is reversed so the closing side is the visual mirror image.
+func reverseModifier(mod string) string {
+	runes := []rune(mod)
+	for i, r := range runes {
+		runes[i] = mirrorRune(r)
+	}
+	for l, r := 0, len(runes)-1; l < r; l, r = l+1, r-1 {
+		runes[l], runes[r] = runes[r], runes[l]
+	}
+	return string(runes)
+}
+
+// findVerb returns the byte index of the first format verb character
+// at or after start, or -1 if none is found.
+func findVerb(format string, start int) int {
+	for j := start; j < len(format); j++ {
+		switch format[j] {
+		case 'p', 's', 'S', 'w', 'W', 't', 'T', '%':
+			return j
+		}
+	}
+	return -1
+}
+
 func formatCustom(format string, usage usageResponse, plan string, opts displayOptions) string {
 	if plan == "" {
 		plan = "Unknown"
@@ -207,41 +426,91 @@ func formatCustom(format string, usage usageResponse, plan string, opts displayO
 			continue
 		}
 		i++
+
+		// %{color spec} — colt-style color code
+		if format[i] == '{' {
+			end := strings.IndexByte(format[i:], '}')
+			if end != -1 {
+				spec := format[i+1 : i+end]
+				out.WriteString(colorSpec(spec))
+				i += end
+				continue
+			}
+			// no closing brace, pass through literally
+			out.WriteString("%{")
+			continue
+		}
+
+		// scan for verb, collecting modifier characters
+		verbIdx := findVerb(format, i)
+		if verbIdx < 0 {
+			// no verb found, output everything literally
+			out.WriteByte('%')
+			out.WriteString(format[i:])
+			i = len(format) - 1
+			continue
+		}
+
+		modifier := format[i:verbIdx]
+		i = verbIdx
+
+		var open, close string
+		if len(modifier) > 0 {
+			open = modifier
+			close = reverseModifier(modifier)
+		}
+
+		var content string
 		switch format[i] {
 		case 'p':
-			out.WriteString(plan)
+			content = plan
 		case 's':
 			if usage.FiveHour != nil {
-				out.WriteString(formatPct(usage.FiveHour.Utilization, opts.remaining))
+				content = formatPct(usage.FiveHour.Utilization, opts.remaining)
 			}
 		case 'S':
 			if usage.FiveHour != nil {
-				out.WriteString(formatReset(usage.FiveHour.ResetsAt, "3:04pm"))
+				content = formatReset(usage.FiveHour.ResetsAt, "3:04pm")
 			}
 		case 'w':
 			if usage.SevenDay != nil {
-				out.WriteString(formatPct(usage.SevenDay.Utilization, opts.remaining))
+				content = formatPct(usage.SevenDay.Utilization, opts.remaining)
 			}
 		case 'W':
 			if usage.SevenDay != nil {
-				out.WriteString(formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"))
+				content = formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm")
 			}
 		case 't':
 			if usage.FiveHour != nil && usage.FiveHour.Utilization >= opts.sessionPct {
-				out.WriteString(formatReset(usage.FiveHour.ResetsAt, "3:04pm"))
+				if s := formatReset(usage.FiveHour.ResetsAt, "3:04pm"); s != "" {
+					content = "resets " + s
+				}
 			}
 		case 'T':
 			if usage.SevenDay != nil && usage.SevenDay.Utilization >= opts.weeklyPct {
-				out.WriteString(formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"))
+				if s := formatReset(usage.SevenDay.ResetsAt, "Mon 3:04pm"); s != "" {
+					content = "resets " + s
+				}
 			}
 		case '%':
 			out.WriteByte('%')
+			continue
 		default:
 			out.WriteByte('%')
+			out.WriteString(modifier)
 			out.WriteByte(format[i])
+			continue
+		}
+
+		if content != "" {
+			out.WriteString(open + content + close)
 		}
 	}
 	return out.String()
+}
+
+func stripCR(s string) string {
+	return strings.ReplaceAll(s, "\r", "")
 }
 
 func main() {
@@ -249,7 +518,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [FORMAT ...]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Trailing arguments are joined and used as a format string.\n")
 		fmt.Fprintf(os.Stderr, "Format verbs: %%p plan, %%s session%%, %%S session reset, %%t session reset (threshold),\n")
-		fmt.Fprintf(os.Stderr, "              %%w weekly%%, %%W weekly reset, %%T weekly reset (threshold), %%%% literal %%\n\n")
+		fmt.Fprintf(os.Stderr, "              %%w weekly%%, %%W weekly reset, %%T weekly reset (threshold), %%%% literal %%\n")
+		fmt.Fprintf(os.Stderr, "Color:        %%{fg [on bg] [with attr ...]}  (colt-style color spec)\n")
+		fmt.Fprintf(os.Stderr, "Border:       %%<chars><verb> to enclose output; right side is mirrored & reversed\n")
+		fmt.Fprintf(os.Stderr, "              Paired chars: ( ) [ ] < > « » ‹ › ← → ⟨ ⟩ ◀ ▶ and more\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -306,7 +578,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -329,7 +601,7 @@ func main() {
 
 	if args := flag.Args(); len(args) > 0 {
 		formatStr := strings.Join(args, " ")
-		fmt.Print(stripTermCodes(formatCustom(formatStr, usage, creds.ClaudeAiOauth.SubscriptionType, opts)))
+		fmt.Print(stripCR(formatCustom(formatStr, usage, creds.ClaudeAiOauth.SubscriptionType, opts)))
 		return
 	}
 
@@ -339,9 +611,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error marshaling JSON: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Print(stripTermCodes(s))
+		fmt.Print(stripCR(s))
 		return
 	}
 
-	fmt.Print(stripTermCodes(formatDisplay(usage, creds.ClaudeAiOauth.SubscriptionType, opts)))
+	fmt.Print(stripCR(formatDisplay(usage, creds.ClaudeAiOauth.SubscriptionType, opts)))
 }

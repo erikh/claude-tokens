@@ -1,5 +1,9 @@
-test:
+test: lint
 	go test -v ./...
 
-install:
+lint:
+	go vet ./...
+	golangci-lint run
+
+install: test
 	go install -v ./...
