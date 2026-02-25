@@ -1,6 +1,6 @@
 # claude-tokens
 
-A small, dependency-free Go utility that displays your Claude API token usage and rate limit status. It reads your existing Claude Code OAuth credentials, automatically refreshes expired tokens, and outputs a compact one-line summary suitable for status bars like [Waybar](https://github.com/Alexays/waybar/wiki).
+A small, dependency-free Go utility that displays your Claude API token usage and rate limit status. It reads your existing Claude Code OAuth credentials, automatically refreshes expired tokens, and outputs a compact one-line summary suitable for status bars like [Waybar](https://github.com/Alexays/waybar/wiki), shell prompts, screen lockers like hyprlock.
 
 ## Prerequisites
 
@@ -325,7 +325,7 @@ case $TERM in
             time=$(date -d "$(stat /tmp/tokens | grep Modify | awk -F: '{ print $2":"$3":"$4 }')" +%s)
             if [ $? -ne 0 ] || [ $(($time + 300)) -lt $(date +%s) ]
             then
-              claude-tokens -p zsh '%{cyan}Cur: %{bold white}%[s%{reset}%{bright red}%!t%{reset} %{yellow}Week: %{bold white}%[w%{reset}%{bright red}%!!T%{reset}' >/tmp/tokens
+              claude-tokens -p zsh '%{cyan}Cur: %{bold white}%[s%{reset}%{red}%(t%{reset} %{yellow}Week: %{bold white}%[w%{reset}%{red}%[!T%{reset}' >/tmp/tokens
             fi
 
             export TOKENS=$(cat /tmp/tokens)
