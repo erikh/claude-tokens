@@ -540,9 +540,9 @@ func stripCR(s string) string {
 var openBrowser = func(url string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", url).Start()
+		return exec.Command("open", url).Run()
 	case "linux":
-		return exec.Command("xdg-open", url).Start()
+		return exec.Command("xdg-open", url).Run()
 	default:
 		return fmt.Errorf("unsupported platform")
 	}
