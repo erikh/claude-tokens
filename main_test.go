@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1971,6 +1974,62 @@ func TestLoginOAuth_CallbackError(t *testing.T) {
 	}
 	if !contains(err.Error(), "access_denied") {
 		t.Errorf("error = %q, want it to contain %q", err.Error(), "access_denied")
+	}
+}
+
+func TestLoginOAuth_BrowserFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "test-access-token",
+			"refresh_token": "test-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer srv.Close()
+
+	oldEndpoint := tokenEndpoint
+	tokenEndpoint = srv.URL
+	defer func() { tokenEndpoint = oldEndpoint }()
+
+	oldOpenBrowser := openBrowser
+	defer func() { openBrowser = oldOpenBrowser }()
+	openBrowser = func(authURL string) error {
+		go func() {
+			resp := simulateOAuthCallback(t, authURL, map[string]string{"code": "test-auth-code"})
+			if err := resp.Body.Close(); err != nil {
+				t.Errorf("closing response body: %v", err)
+			}
+		}()
+		return fmt.Errorf("xdg-open: no method available for opening")
+	}
+
+	// Capture stderr
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	defer func() { os.Stderr = oldStderr }()
+
+	dir := t.TempDir()
+	credsPath := filepath.Join(dir, "creds.json")
+
+	creds, err := loginOAuth(credsPath)
+	w.Close()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.ClaudeAiOauth.AccessToken != "test-access-token" {
+		t.Errorf("access token = %q, want %q", creds.ClaudeAiOauth.AccessToken, "test-access-token")
+	}
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	stderr := buf.String()
+	if !contains(stderr, "Could not open browser automatically") {
+		t.Errorf("stderr = %q, want it to contain browser fallback message", stderr)
+	}
+	if !contains(stderr, "Please open this URL manually") {
+		t.Errorf("stderr = %q, want it to contain manual URL instruction", stderr)
 	}
 }
 
