@@ -576,14 +576,21 @@ func loginOAuth(credsPath string) (*credentials, error) {
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
 
 	// Build authorization URL
-	authURL := fmt.Sprintf(
-		"https://claude.ai/oauth/authorize?code=true&client_id=%s&response_type=code&redirect_uri=%s&scope=%s&code_challenge=%s&code_challenge_method=S256&state=%s",
-		oauthClientID,
-		url.QueryEscape(redirectURI),
-		url.QueryEscape("org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers"),
-		codeChallenge,
-		state,
-	)
+	authURL := (&url.URL{
+		Scheme: "https",
+		Host:   "claude.ai",
+		Path:   "/oauth/authorize",
+		RawQuery: url.Values{
+			"code":                  {"true"},
+			"client_id":             {oauthClientID},
+			"response_type":         {"code"},
+			"redirect_uri":          {redirectURI},
+			"scope":                 {"user:profile user:inference user:sessions:claude_code user:mcp_servers"},
+			"code_challenge":        {codeChallenge},
+			"code_challenge_method": {"S256"},
+			"state":                 {state},
+		}.Encode(),
+	}).String()
 
 	// Channel to receive the authorization code
 	type callbackResult struct {
