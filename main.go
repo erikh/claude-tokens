@@ -1,22 +1,13 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -120,10 +111,6 @@ func colorSpec(spec string) string {
 	return fmt.Sprintf("\x1b[%sm", strings.Join(codes, ";"))
 }
 
-const oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-
-var tokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
-
 type oauthCredentials struct {
 	AccessToken      string   `json:"accessToken"`
 	RefreshToken     string   `json:"refreshToken"`
@@ -147,12 +134,6 @@ type usageResponse struct {
 	SevenDay *usageBucket `json:"seven_day"`
 }
 
-type tokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-}
-
 type jsonBucket struct {
 	Utilization float64 `json:"utilization"`
 	ResetsAt    string  `json:"resets_at,omitempty"`
@@ -161,45 +142,6 @@ type jsonBucket struct {
 type jsonUsageOutput struct {
 	Session *jsonBucket `json:"session,omitempty"`
 	Weekly  *jsonBucket `json:"weekly,omitempty"`
-}
-
-func refreshToken(creds *credentials, credsPath string) error {
-	body, _ := json.Marshal(map[string]string{
-		"grant_type":    "refresh_token",
-		"refresh_token": creds.ClaudeAiOauth.RefreshToken,
-		"client_id":     oauthClientID,
-	})
-
-	resp, err := http.Post(
-		tokenEndpoint,
-		"application/json",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		return fmt.Errorf("refresh request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("refresh failed (%d): %s", resp.StatusCode, b)
-	}
-
-	var tok tokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
-		return fmt.Errorf("parsing refresh response: %w", err)
-	}
-
-	creds.ClaudeAiOauth.AccessToken = tok.AccessToken
-	creds.ClaudeAiOauth.RefreshToken = tok.RefreshToken
-	creds.ClaudeAiOauth.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).UnixMilli()
-
-	data, err := json.Marshal(creds)
-	if err != nil {
-		return fmt.Errorf("marshaling credentials: %w", err)
-	}
-
-	return os.WriteFile(credsPath, data, 0600)
 }
 
 func formatReset(raw *string, layout string) string {
@@ -537,153 +479,6 @@ func stripCR(s string) string {
 	return strings.ReplaceAll(s, "\r", "")
 }
 
-var openBrowser = func(url string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url).Run()
-	case "linux":
-		return exec.Command("xdg-open", url).Run()
-	default:
-		return fmt.Errorf("unsupported platform")
-	}
-}
-
-func loginOAuth(credsPath string) (*credentials, error) {
-	// Generate PKCE code verifier (32 random bytes, base64url-encoded)
-	verifierBytes := make([]byte, 32)
-	if _, err := rand.Read(verifierBytes); err != nil {
-		return nil, fmt.Errorf("generating code verifier: %w", err)
-	}
-	codeVerifier := base64.RawURLEncoding.EncodeToString(verifierBytes)
-
-	// Code challenge = base64url(sha256(code_verifier))
-	h := sha256.Sum256([]byte(codeVerifier))
-	codeChallenge := base64.RawURLEncoding.EncodeToString(h[:])
-
-	// Random state parameter
-	stateBytes := make([]byte, 16)
-	if _, err := rand.Read(stateBytes); err != nil {
-		return nil, fmt.Errorf("generating state: %w", err)
-	}
-	state := base64.RawURLEncoding.EncodeToString(stateBytes)
-
-	// Start localhost server on random port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("starting local server: %w", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
-
-	// Build authorization URL
-	authURL := (&url.URL{
-		Scheme: "https",
-		Host:   "claude.ai",
-		Path:   "/oauth/authorize",
-		RawQuery: url.Values{
-			"client_id":             {oauthClientID},
-			"response_type":         {"code"},
-			"redirect_uri":          {redirectURI},
-			"scope":                 {"user:profile user:inference"},
-			"code_challenge":        {codeChallenge},
-			"code_challenge_method": {"S256"},
-			"state":                 {state},
-		}.Encode(),
-	}).String()
-
-	// Channel to receive the authorization code
-	type callbackResult struct {
-		code string
-		err  error
-	}
-	resultCh := make(chan callbackResult, 1)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("state") != state {
-			http.Error(w, "State mismatch", http.StatusBadRequest)
-			return
-		}
-		if errParam := r.URL.Query().Get("error"); errParam != "" {
-			desc := r.URL.Query().Get("error_description")
-			resultCh <- callbackResult{err: fmt.Errorf("OAuth error: %s: %s", errParam, desc)}
-			_, _ = fmt.Fprintf(w, "Authentication failed: %s", errParam)
-			return
-		}
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			resultCh <- callbackResult{err: fmt.Errorf("no authorization code received")}
-			http.Error(w, "No code received", http.StatusBadRequest)
-			return
-		}
-		resultCh <- callbackResult{code: code}
-		_, _ = fmt.Fprint(w, "Authentication successful! You can close this tab.")
-	})
-
-	srv := &http.Server{Handler: mux}
-	go func() { _ = srv.Serve(listener) }()
-
-	// Open browser
-	fmt.Fprintln(os.Stderr, "Opening browser to authenticate with Claude...")
-	if err := openBrowser(authURL); err != nil {
-		fmt.Fprintf(os.Stderr, "Could not open browser automatically.\nPlease open this URL manually:\n%s\n", authURL)
-	}
-
-	// Wait for callback
-	result := <-resultCh
-	_ = srv.Shutdown(context.Background())
-	if result.err != nil {
-		return nil, result.err
-	}
-
-	// Exchange authorization code for tokens
-	body, _ := json.Marshal(map[string]string{
-		"grant_type":    "authorization_code",
-		"code":          result.code,
-		"code_verifier": codeVerifier,
-		"redirect_uri":  redirectURI,
-		"client_id":     oauthClientID,
-	})
-
-	resp, err := http.Post(tokenEndpoint, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("token exchange request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, b)
-	}
-
-	var tok tokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
-		return nil, fmt.Errorf("parsing token response: %w", err)
-	}
-
-	creds := &credentials{
-		ClaudeAiOauth: oauthCredentials{
-			AccessToken:  tok.AccessToken,
-			RefreshToken: tok.RefreshToken,
-			ExpiresAt:    time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).UnixMilli(),
-		},
-	}
-
-	// Persist credentials
-	if err := os.MkdirAll(filepath.Dir(credsPath), 0700); err != nil {
-		return nil, fmt.Errorf("creating credentials directory: %w", err)
-	}
-	data, err := json.Marshal(creds)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling credentials: %w", err)
-	}
-	if err := os.WriteFile(credsPath, data, 0600); err != nil {
-		return nil, fmt.Errorf("writing credentials: %w", err)
-	}
-
-	return creds, nil
-}
-
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [FORMAT ...]\n\n", os.Args[0])
@@ -731,23 +526,12 @@ func main() {
 	if creds.ClaudeAiOauth.AccessToken == "" {
 		apiKey = os.Getenv("ANTHROPIC_API_KEY")
 		if apiKey == "" {
-			loginCreds, err := loginOAuth(credsPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "OAuth login failed: %v\n", err)
-				os.Exit(1)
-			}
-			creds = *loginCreds
+			fmt.Fprintf(os.Stderr, "error: no credentials found\nEither set ANTHROPIC_API_KEY or log in with Claude Code (credentials are read from ~/.claude/.credentials.json).\n")
+			os.Exit(1)
 		}
 	} else if time.Now().UnixMilli() >= creds.ClaudeAiOauth.ExpiresAt {
-		if err := refreshToken(&creds, credsPath); err != nil {
-			fmt.Fprintf(os.Stderr, "token refresh failed: %v\nRe-authenticating...\n", err)
-			loginCreds, err := loginOAuth(credsPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "OAuth login failed: %v\n", err)
-				os.Exit(1)
-			}
-			creds = *loginCreds
-		}
+		fmt.Fprintf(os.Stderr, "error: OAuth token has expired\nPlease log in again with Claude Code to refresh your credentials in ~/.claude/.credentials.json.\n")
+		os.Exit(1)
 	}
 
 	req, err := http.NewRequest("GET", "https://api.anthropic.com/api/oauth/usage", nil)
@@ -772,41 +556,7 @@ func main() {
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		if apiKey == "" {
-			fmt.Fprintf(os.Stderr, "Authentication expired or revoked. Re-authenticating...\n")
-			loginCreds, err := loginOAuth(credsPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "OAuth login failed: %v\n", err)
-				os.Exit(1)
-			}
-			creds = *loginCreds
-
-			req2, err := http.NewRequest("GET", "https://api.anthropic.com/api/oauth/usage", nil)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			req2.Header.Set("Authorization", "Bearer "+creds.ClaudeAiOauth.AccessToken)
-			req2.Header.Set("Content-Type", "application/json")
-			req2.Header.Set("anthropic-beta", "oauth-2025-04-20")
-
-			resp2, err := http.DefaultClient.Do(req2)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			defer func() { _ = resp2.Body.Close() }()
-			respBody, _ = io.ReadAll(resp2.Body)
-			if resp2.StatusCode != http.StatusOK {
-				fmt.Fprintf(os.Stderr, "API error %d: %s\n", resp2.StatusCode, respBody)
-				os.Exit(1)
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "API error %d: %s\n", resp.StatusCode, respBody)
-			os.Exit(1)
-		}
-	} else if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
 		fmt.Fprintf(os.Stderr, "API error %d: %s\n", resp.StatusCode, respBody)
 		os.Exit(1)
 	}
