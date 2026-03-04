@@ -537,7 +537,7 @@ func stripCR(s string) string {
 	return strings.ReplaceAll(s, "\r", "")
 }
 
-func openBrowser(url string) error {
+var openBrowser = func(url string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.Command("open", url).Start()
@@ -595,14 +595,13 @@ func loginOAuth(credsPath string) (*credentials, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("state") != state {
-			resultCh <- callbackResult{err: fmt.Errorf("state mismatch")}
 			http.Error(w, "State mismatch", http.StatusBadRequest)
 			return
 		}
 		if errParam := r.URL.Query().Get("error"); errParam != "" {
 			desc := r.URL.Query().Get("error_description")
 			resultCh <- callbackResult{err: fmt.Errorf("OAuth error: %s: %s", errParam, desc)}
-			fmt.Fprintf(w, "Authentication failed: %s", errParam)
+			_, _ = fmt.Fprintf(w, "Authentication failed: %s", errParam)
 			return
 		}
 		code := r.URL.Query().Get("code")
@@ -612,7 +611,7 @@ func loginOAuth(credsPath string) (*credentials, error) {
 			return
 		}
 		resultCh <- callbackResult{code: code}
-		fmt.Fprint(w, "Authentication successful! You can close this tab.")
+		_, _ = fmt.Fprint(w, "Authentication successful! You can close this tab.")
 	})
 
 	srv := &http.Server{Handler: mux}

@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func ptr(s string) *string { return &s }
@@ -1813,6 +1815,215 @@ func TestRefreshToken_ConnectionError(t *testing.T) {
 	}
 	if got := err.Error(); !contains(got, "refresh request failed") {
 		t.Errorf("error = %q, want it to contain %q", got, "refresh request failed")
+	}
+}
+
+// simulateOAuthCallback parses the auth URL from openBrowser and hits the
+// localhost callback server with the given query parameters. If params does
+// not contain "state", the real state from the auth URL is used automatically.
+func simulateOAuthCallback(t *testing.T, authURL string, params map[string]string) *http.Response {
+	t.Helper()
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("parsing auth URL: %v", err)
+	}
+	redirectURI := u.Query().Get("redirect_uri")
+	state := u.Query().Get("state")
+
+	cb, err := url.Parse(redirectURI)
+	if err != nil {
+		t.Fatalf("parsing redirect URI: %v", err)
+	}
+	q := cb.Query()
+	if _, ok := params["state"]; !ok {
+		q.Set("state", state)
+	}
+	for k, v := range params {
+		q.Set(k, v)
+	}
+	cb.RawQuery = q.Encode()
+
+	resp, err := http.Get(cb.String())
+	if err != nil {
+		t.Fatalf("callback request failed: %v", err)
+	}
+	return resp
+}
+
+func TestLoginOAuth_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "test-access-token",
+			"refresh_token": "test-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer srv.Close()
+
+	oldEndpoint := tokenEndpoint
+	tokenEndpoint = srv.URL
+	defer func() { tokenEndpoint = oldEndpoint }()
+
+	oldOpenBrowser := openBrowser
+	defer func() { openBrowser = oldOpenBrowser }()
+	openBrowser = func(authURL string) error {
+		go func() {
+			resp := simulateOAuthCallback(t, authURL, map[string]string{"code": "test-auth-code"})
+			if err := resp.Body.Close(); err != nil {
+				t.Errorf("closing response body: %v", err)
+			}
+		}()
+		return nil
+	}
+
+	dir := t.TempDir()
+	credsPath := filepath.Join(dir, "creds.json")
+
+	creds, err := loginOAuth(credsPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if creds.ClaudeAiOauth.AccessToken != "test-access-token" {
+		t.Errorf("access token = %q, want %q", creds.ClaudeAiOauth.AccessToken, "test-access-token")
+	}
+	if creds.ClaudeAiOauth.RefreshToken != "test-refresh-token" {
+		t.Errorf("refresh token = %q, want %q", creds.ClaudeAiOauth.RefreshToken, "test-refresh-token")
+	}
+	if creds.ClaudeAiOauth.ExpiresAt <= time.Now().UnixMilli() {
+		t.Error("expected ExpiresAt to be in the future")
+	}
+
+	data, err := os.ReadFile(credsPath)
+	if err != nil {
+		t.Fatalf("reading saved credentials: %v", err)
+	}
+	var saved credentials
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("parsing saved credentials: %v", err)
+	}
+	if saved.ClaudeAiOauth.AccessToken != "test-access-token" {
+		t.Errorf("saved access token = %q, want %q", saved.ClaudeAiOauth.AccessToken, "test-access-token")
+	}
+	if saved.ClaudeAiOauth.RefreshToken != "test-refresh-token" {
+		t.Errorf("saved refresh token = %q, want %q", saved.ClaudeAiOauth.RefreshToken, "test-refresh-token")
+	}
+}
+
+func TestLoginOAuth_TokenExchangeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("invalid_grant"))
+	}))
+	defer srv.Close()
+
+	oldEndpoint := tokenEndpoint
+	tokenEndpoint = srv.URL
+	defer func() { tokenEndpoint = oldEndpoint }()
+
+	oldOpenBrowser := openBrowser
+	defer func() { openBrowser = oldOpenBrowser }()
+	openBrowser = func(authURL string) error {
+		go func() {
+			resp := simulateOAuthCallback(t, authURL, map[string]string{"code": "test-auth-code"})
+			if err := resp.Body.Close(); err != nil {
+				t.Errorf("closing response body: %v", err)
+			}
+		}()
+		return nil
+	}
+
+	dir := t.TempDir()
+	credsPath := filepath.Join(dir, "creds.json")
+
+	_, err := loginOAuth(credsPath)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !contains(err.Error(), "token exchange failed") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "token exchange failed")
+	}
+}
+
+func TestLoginOAuth_CallbackError(t *testing.T) {
+	oldOpenBrowser := openBrowser
+	defer func() { openBrowser = oldOpenBrowser }()
+	openBrowser = func(authURL string) error {
+		go func() {
+			resp := simulateOAuthCallback(t, authURL, map[string]string{
+				"error":             "access_denied",
+				"error_description": "User denied access",
+			})
+			if err := resp.Body.Close(); err != nil {
+				t.Errorf("closing response body: %v", err)
+			}
+		}()
+		return nil
+	}
+
+	dir := t.TempDir()
+	credsPath := filepath.Join(dir, "creds.json")
+
+	_, err := loginOAuth(credsPath)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !contains(err.Error(), "access_denied") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "access_denied")
+	}
+}
+
+func TestLoginOAuth_StateMismatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "test-access-token",
+			"refresh_token": "test-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer srv.Close()
+
+	oldEndpoint := tokenEndpoint
+	tokenEndpoint = srv.URL
+	defer func() { tokenEndpoint = oldEndpoint }()
+
+	oldOpenBrowser := openBrowser
+	defer func() { openBrowser = oldOpenBrowser }()
+	openBrowser = func(authURL string) error {
+		go func() {
+			// First: bad state — should get 400
+			resp := simulateOAuthCallback(t, authURL, map[string]string{
+				"code":  "test-auth-code",
+				"state": "wrong-state",
+			})
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("bad state response = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+			}
+			if err := resp.Body.Close(); err != nil {
+				t.Errorf("closing response body: %v", err)
+			}
+
+			// Second: correct state — should succeed
+			resp = simulateOAuthCallback(t, authURL, map[string]string{"code": "test-auth-code"})
+			if err := resp.Body.Close(); err != nil {
+				t.Errorf("closing response body: %v", err)
+			}
+		}()
+		return nil
+	}
+
+	dir := t.TempDir()
+	credsPath := filepath.Join(dir, "creds.json")
+
+	creds, err := loginOAuth(credsPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if creds.ClaudeAiOauth.AccessToken != "test-access-token" {
+		t.Errorf("access token = %q, want %q", creds.ClaudeAiOauth.AccessToken, "test-access-token")
 	}
 }
 
