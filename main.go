@@ -734,8 +734,13 @@ func main() {
 		}
 	} else if time.Now().UnixMilli() >= creds.ClaudeAiOauth.ExpiresAt {
 		if err := refreshToken(&creds, credsPath); err != nil {
-			fmt.Fprintf(os.Stderr, "token refresh failed: %v\nRun 'claude login' to re-authenticate.\n", err)
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "token refresh failed: %v\nRe-authenticating...\n", err)
+			loginCreds, err := loginOAuth(credsPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "OAuth login failed: %v\n", err)
+				os.Exit(1)
+			}
+			creds = *loginCreds
 		}
 	}
 
@@ -761,7 +766,41 @@ func main() {
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		if apiKey == "" {
+			fmt.Fprintf(os.Stderr, "Authentication expired or revoked. Re-authenticating...\n")
+			loginCreds, err := loginOAuth(credsPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "OAuth login failed: %v\n", err)
+				os.Exit(1)
+			}
+			creds = *loginCreds
+
+			req2, err := http.NewRequest("GET", "https://api.anthropic.com/api/oauth/usage", nil)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			req2.Header.Set("Authorization", "Bearer "+creds.ClaudeAiOauth.AccessToken)
+			req2.Header.Set("Content-Type", "application/json")
+			req2.Header.Set("anthropic-beta", "oauth-2025-04-20")
+
+			resp2, err := http.DefaultClient.Do(req2)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			defer func() { _ = resp2.Body.Close() }()
+			respBody, _ = io.ReadAll(resp2.Body)
+			if resp2.StatusCode != http.StatusOK {
+				fmt.Fprintf(os.Stderr, "API error %d: %s\n", resp2.StatusCode, respBody)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "API error %d: %s\n", resp.StatusCode, respBody)
+			os.Exit(1)
+		}
+	} else if resp.StatusCode != http.StatusOK {
 		fmt.Fprintf(os.Stderr, "API error %d: %s\n", resp.StatusCode, respBody)
 		os.Exit(1)
 	}
