@@ -122,7 +122,7 @@ func colorSpec(spec string) string {
 
 const oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
-var tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
+var tokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 
 type oauthCredentials struct {
 	AccessToken      string   `json:"accessToken"`
@@ -581,11 +581,10 @@ func loginOAuth(credsPath string) (*credentials, error) {
 		Host:   "claude.ai",
 		Path:   "/oauth/authorize",
 		RawQuery: url.Values{
-			"code":                  {"true"},
 			"client_id":             {oauthClientID},
 			"response_type":         {"code"},
 			"redirect_uri":          {redirectURI},
-			"scope":                 {"user:profile user:inference user:sessions:claude_code user:mcp_servers"},
+			"scope":                 {"user:profile user:inference"},
 			"code_challenge":        {codeChallenge},
 			"code_challenge_method": {"S256"},
 			"state":                 {state},
